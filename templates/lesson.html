@@ -1,0 +1,691 @@
+
+{% extends "base.html" %}
+
+{% block content %}
+<div class="lesson-reading" id="lessonTop">
+
+  <div class="reading-progress">
+    <span id="readingProgress"></span>
+  </div>
+
+  <!-- HEADER -->
+  <div class="page-head">
+    <div class="eyebrow">
+      <a href="{{ url_for('courses') }}">ACADÉMIE</a>
+      · {{ subject.name }} · {{ module.title }}
+    </div>
+
+    <h1>{{ lesson.title }}</h1>
+
+    <p class="muted">
+      Chapitre : {{ chapter.title }} ·
+      Ressource de préparation, non certifiée comme exigence officielle.
+    </p>
+
+    <div class="actions lesson-nav">
+      {% if previous_lesson %}
+        <a class="btn ghost-light"
+           href="{{ url_for('lesson', slug=slug, lesson_id=previous_lesson.id) }}">
+          ← Leçon précédente
+        </a>
+      {% endif %}
+
+      {% if next_lesson %}
+        <a class="btn ghost-light"
+           href="{{ url_for('lesson', slug=slug, lesson_id=next_lesson.id) }}">
+          Leçon suivante →
+        </a>
+      {% endif %}
+
+      {% if completion %}
+        <span class="tag">Leçon terminée ✓</span>
+      {% else %}
+        <form method="post"
+              action="{{ url_for('complete_lesson', slug=slug, lesson_id=lesson.id) }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn primary" type="submit">
+            Marquer comme terminée
+          </button>
+        </form>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="lesson-layout">
+
+    <!-- TABLE OF CONTENTS -->
+    <aside class="panel lesson-toc">
+      <div class="eyebrow">DANS CETTE LEÇON</div>
+
+      <a href="#objectifs">Objectifs</a>
+      <a href="#explication">Explication</a>
+      <a href="#exemple">Exemple pratique</a>
+      <a href="#videos">Vidéos vérifiées</a>
+      <a href="#exercises">Exercices</a>
+      <a href="#quiz">QCM du chapitre</a>
+      <a href="#revision">Résumé et révision</a>
+
+      <small class="muted">
+        Lecture : <b id="readingPercent">0%</b>
+      </small>
+    </aside>
+
+    <!-- LESSON CONTENT -->
+    <article class="panel lesson-content">
+
+      <!-- OBJECTIVES -->
+      <section id="objectifs">
+        <div class="eyebrow">OBJECTIFS D’APPRENTISSAGE</div>
+
+        <ul>
+          {% for objective in objectives %}
+            <li>{{ objective }}</li>
+          {% endfor %}
+        </ul>
+
+        <h2>Prérequis</h2>
+        <p class="muted">{{ lesson.prerequisites_fr }}</p>
+      </section>
+
+      <!-- THEORY -->
+      <section id="explication">
+        <div class="eyebrow">LE COURS</div>
+        <h2>Explication détaillée</h2>
+
+        <div class="translation-pair">
+
+          <div class="lesson-copy lang-fr">
+            {% for heading, body in theory_sections %}
+              {% if not heading.startswith('Exemples Pratiques Distincts') %}
+                <section class="lesson-theory-section">
+                  <h3>{{ heading }}</h3>
+                  <div class="theory-body">{{ body }}</div>
+                </section>
+              {% endif %}
+            {% endfor %}
+          </div>
+
+          {% if lesson.theory_ar %}
+            <div class="lang-ar darija"
+                 lang="ar"
+                 dir="rtl">
+              {{ lesson.theory_ar }}
+            </div>
+          {% endif %}
+
+        </div>
+      </section>
+
+      <!-- PRACTICAL EXAMPLE -->
+      <section id="exemple">
+        <h2>Exemple pratique</h2>
+
+        <div class="theory-body">
+          {{ lesson.example_fr }}
+        </div>
+
+        {% if lesson.code_example %}
+          <div class="code-container">
+
+            <div class="code-header">
+              <span>Exemple de code</span>
+
+              <button type="button"
+                      class="btn ghost-video copy-code">
+                Copier le code
+              </button>
+            </div>
+
+            <pre class="code-example"><code>{{ lesson.code_example | trim }}</code></pre>
+
+          </div>
+        {% endif %}
+      </section>
+
+      <!-- VIDEOS -->
+      <section id="videos">
+        <div class="eyebrow">RESSOURCES VIDÉO VALIDÉES</div>
+        <h2>Regarder et réviser</h2>
+
+        {% if videos %}
+
+          <div class="lesson-video-list">
+
+            {% for video in videos %}
+              {% set meta = video_meta.get(video.id) if video_meta is defined else none %}
+
+              <article class="lesson-video">
+
+                <div class="video-frame">
+                  <iframe
+                    src="https://www.youtube-nocookie.com/embed/{{ video.video_id }}"
+                    title="{{ video.title }} — {{ video.channel }}"
+                    loading="lazy"
+                    referrerpolicy="strict-origin-when-cross-origin"
+                    allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowfullscreen>
+                  </iframe>
+                </div>
+
+                <div class="qmeta">
+                  <span>{{ video.language }}</span>
+
+                  <span>
+                    {% if video.duration_minutes %}
+                      {{ video.duration_minutes }} min
+                    {% else %}
+                      Durée non renseignée
+                    {% endif %}
+                  </span>
+                </div>
+
+                <h3>{{ video.title }}</h3>
+                <p class="muted">{{ video.channel }}</p>
+
+                {% if meta and meta.description %}
+                  <p>{{ meta.description }}</p>
+                {% endif %}
+
+                <form method="post"
+                      action="{{ url_for('mark_video_watched', video_id=video.id) }}">
+
+                  <input type="hidden"
+                         name="csrf_token"
+                         value="{{ csrf_token() }}">
+
+                  <input type="hidden"
+                         name="next"
+                         value="{{ url_for('lesson', slug=slug, lesson_id=lesson.id) }}">
+
+                  <button class="btn {{ 'ghost-video' if video.id in watched_video_ids else 'primary' }}"
+                          type="submit">
+                    {{ 'Visionnée ✓' if video.id in watched_video_ids else 'Marquer comme visionnée' }}
+                  </button>
+
+                </form>
+
+              </article>
+            {% endfor %}
+
+          </div>
+
+        {% else %}
+
+          <div class="empty-note">
+            <b>Aucune vidéo vérifiée pour ce chapitre, pour le moment.</b>
+
+            <p class="muted">
+              Une vidéo n’apparaîtra ici qu’après ajout et validation par l’administration.
+            </p>
+
+            <a href="{{ url_for('videos') }}">
+              Consulter les autres vidéos validées ↗
+            </a>
+          </div>
+
+        {% endif %}
+      </section>
+
+      <!-- EXERCISES -->
+      <section id="exercises">
+        <div class="eyebrow">ENTRAÎNEMENT GUIDÉ</div>
+        <h2>Exercices et corrections</h2>
+
+        {% if exercises %}
+
+          {% for exercise in exercises %}
+
+            <article class="exercise-card"
+                     id="exercise-{{ exercise.id }}">
+
+              <div class="qmeta">
+                <span>
+                  {{
+                    {
+                      'qcm': 'QCM',
+                      'true_false': 'Vrai / faux',
+                      'short_answer': 'Réponse courte',
+                      'open': 'Correction manuelle'
+                    }.get(exercise.exercise_type, 'Exercice')
+                  }}
+                </span>
+
+                <span>{{ exercise.level }}</span>
+              </div>
+
+              <h3>{{ exercise.title }}</h3>
+
+              <div class="exercise-prompt">
+                {{ exercise.prompt_fr }}
+              </div>
+
+              {% if exercise.prompt_ar %}
+                <div class="darija"
+                     lang="ar"
+                     dir="rtl">
+                  {{ exercise.prompt_ar }}
+                </div>
+              {% endif %}
+
+              {% if exercise.learning_objective_fr %}
+                <p class="muted">
+                  <b>Objectif :</b>
+                  {{ exercise.learning_objective_fr }}
+                </p>
+              {% endif %}
+
+              <form method="post"
+                    action="{{ url_for('submit_exercise_attempt', exercise_id=exercise.id) }}"
+                    class="content-form">
+
+                <input type="hidden"
+                       name="csrf_token"
+                       value="{{ csrf_token() }}">
+
+                {% if exercise.exercise_type == 'qcm' %}
+
+                  {% for option in exercise.options_json | fromjson %}
+                    <label class="option">
+                      <input type="radio"
+                             name="answer"
+                             value="{{ loop.index0 }}"
+                             required>
+                      <span>{{ option }}</span>
+                    </label>
+                  {% endfor %}
+
+                {% elif exercise.exercise_type == 'true_false' %}
+
+                  <label class="option">
+                    <input type="radio"
+                           name="answer"
+                           value="true"
+                           required>
+                    <span>Vrai</span>
+                  </label>
+
+                  <label class="option">
+                    <input type="radio"
+                           name="answer"
+                           value="false"
+                           required>
+                    <span>Faux</span>
+                  </label>
+
+                {% elif exercise.exercise_type == 'short_answer' %}
+
+                  <label>
+                    Ta réponse
+                    <input class="field"
+                           name="answer"
+                           maxlength="12000"
+                           required>
+                  </label>
+
+                {% else %}
+
+                  {% if ai_grading_configured %}
+                    <p class="notice">Cette réponse sera transmise au service d’évaluation IA configuré pour proposer une correction. Les réponses incertaines restent à corriger par un enseignant.</p>
+                  {% else %}
+                    <p class="notice">Aucun correcteur sémantique n’est configuré : cette réponse sera transmise à un enseignant pour correction manuelle.</p>
+                  {% endif %}
+
+                  <label>
+                    Ta réponse
+                    <textarea class="field"
+                              name="answer"
+                              maxlength="12000"
+                              rows="5"
+                              required></textarea>
+                  </label>
+
+                {% endif %}
+
+                <button class="btn primary" type="submit">
+                  Envoyer la réponse
+                </button>
+
+              </form>
+
+              <!-- PREVIOUS ATTEMPTS -->
+              {% for attempt in exercise_attempts.get(exercise.id, []) %}
+
+                <div class="exercise-feedback">
+
+                  <div class="qmeta">
+                    <span>
+                      {{ attempt.created_at.strftime('%d/%m/%Y %H:%M') }}
+                    </span>
+
+                    <span>
+                      {% if attempt.status == 'pending_manual' %}
+                        En attente de correction
+                      {% elif attempt.status == 'ai_graded' %}
+                        Évaluée par l’IA · à vérifier si nécessaire
+                      {% elif attempt.status == 'auto_graded' %}
+                        Correction automatique
+                      {% else %}
+                        Corrigée par un enseignant
+                      {% endif %}
+
+                      {% if attempt.score is not none %}
+                        · {{ attempt.score | round | int }} %
+                      {% endif %}
+                    </span>
+                  </div>
+
+                  <p>
+                    <b>Ta réponse :</b>
+                    {{ attempt.submitted_answer }}
+                  </p>
+
+                  {% if attempt.status in ['auto_graded', 'ai_graded'] %}
+                    {% if attempt.status == 'ai_graded' and attempt.feedback.startswith('Réponse correcte') %}
+                      <div class="exercise-result exercise-result-correct" role="status">
+                        <strong>✓ Bonne réponse · {{ attempt.score | round | int }} %</strong>
+                      </div>
+                    {% elif attempt.status == 'ai_graded' and attempt.feedback.startswith('Réponse partiellement correcte') %}
+                      <div class="exercise-result exercise-result-pending" role="status">
+                        <strong>Réponse partiellement correcte · {{ attempt.score | round | int }} %</strong>
+                      </div>
+                    {% elif attempt.status == 'ai_graded' %}
+                      <div class="exercise-result exercise-result-incorrect" role="alert">
+                        <strong>✗ Réponse incorrecte · {{ attempt.score | round | int }} %</strong>
+                      </div>
+                    {% elif attempt.score is not none and attempt.score >= 100 %}
+                      <div class="exercise-result exercise-result-correct" role="status">
+                        <strong>✓ Bonne réponse !</strong>
+                      </div>
+                    {% elif attempt.score is not none and attempt.score > 0 %}
+                      <div class="exercise-result exercise-result-pending" role="status">
+                        <strong>Réponse partiellement correcte · {{ attempt.score | round | int }} %</strong>
+                      </div>
+                    {% else %}
+                      <div class="exercise-result exercise-result-incorrect" role="alert">
+                        <strong>✗ Réponse incorrecte.</strong>
+                      </div>
+
+                      {% if exercise.exercise_type == 'qcm' and exercise.correct_answer is not none %}
+                        {% set correct_index = exercise.correct_answer | int %}
+                        {% set exercise_options = exercise.options_json | fromjson %}
+                        {% if correct_index >= 0 and correct_index < exercise_options | length %}
+                          <p>
+                            <b>Bonne réponse :</b>
+                            {{ exercise_options[correct_index] }}
+                          </p>
+                        {% endif %}
+                      {% elif exercise.exercise_type == 'true_false' and exercise.correct_answer is not none %}
+                        <p>
+                          <b>Bonne réponse :</b>
+                          {{ 'Vrai' if exercise.correct_answer|string|lower == 'true' else 'Faux' }}
+                        </p>
+                      {% elif exercise.exercise_type == 'short_answer' %}
+                        {% set accepted_answers = exercise.accepted_answers_json | fromjson %}
+                        {% if accepted_answers %}
+                          <p>
+                            <b>Réponse(s) acceptée(s) :</b>
+                            {{ accepted_answers | join(' / ') }}
+                          </p>
+                        {% elif exercise.correct_answer is not none %}
+                          <p>
+                            <b>Bonne réponse :</b>
+                            {{ exercise.correct_answer }}
+                          </p>
+                        {% endif %}
+                      {% endif %}
+                    {% endif %}
+                  {% elif attempt.status == 'pending_manual' %}
+                    <div class="exercise-result exercise-result-pending" role="status">
+                      {{ attempt.feedback or "Réponse en attente de correction par l'équipe pédagogique." }}
+                    </div>
+                  {% elif attempt.status == 'manually_graded' %}
+                    <div class="exercise-result exercise-result-pending" role="status">
+                      <strong>Correction de l’enseignant · {{ attempt.score | round | int }} %</strong>
+                    </div>
+                  {% endif %}
+
+                  {% if attempt.feedback and attempt.status != 'pending_manual' %}
+                    <p>
+                      <b>Explication :</b>
+                      {{ attempt.feedback }}
+                    </p>
+                  {% endif %}
+
+                  {% if attempt.status != 'pending_manual' and attempt.status != 'ai_graded' and exercise.solution_fr %}
+                    <details>
+                      <summary>Voir la correction complète</summary>
+
+                      <div class="theory-body">
+                        {{ exercise.solution_fr }}
+                      </div>
+
+                      {% if exercise.solution_ar %}
+                        <div class="darija"
+                             lang="ar"
+                             dir="rtl">
+                          {{ exercise.solution_ar }}
+                        </div>
+                      {% endif %}
+                    </details>
+                  {% endif %}
+
+                </div>
+
+              {% endfor %}
+
+            </article>
+
+          {% endfor %}
+
+        {% else %}
+
+          <div class="empty-note">
+            Aucun exercice dédié n’est publié pour cette leçon.
+            Tu peux utiliser le QCM de chapitre ci-dessous.
+          </div>
+
+        {% endif %}
+      </section>
+
+      <!-- CHAPTER QUIZ -->
+      <section id="quiz">
+        <div class="eyebrow">VÉRIFIER LA COMPRÉHENSION</div>
+        <h2>QCM du chapitre</h2>
+
+        {% if questions %}
+
+          <form method="post">
+
+            <input type="hidden"
+                   name="csrf_token"
+                   value="{{ csrf_token() }}">
+
+            {% for q in questions %}
+
+              <article class="question">
+
+                <div class="qmeta">
+                  <span>{{ q.topic }}</span>
+                  <span>{{ q.level }}</span>
+                </div>
+
+                {% if learning_objectives.get(q.id) %}
+                  <small class="question-objective">
+                    Objectif : {{ learning_objectives.get(q.id) }}
+                  </small>
+                {% endif %}
+
+                <div class="translation-pair">
+                  <h3 class="lang-fr">
+                    {{ loop.index }}. {{ q.prompt_fr }}
+                  </h3>
+
+                  {% if q.prompt_ar %}
+                    <p class="lang-ar darija"
+                       lang="ar"
+                       dir="rtl">
+                      {{ q.prompt_ar }}
+                    </p>
+                  {% endif %}
+                </div>
+
+                {% for option in q.options_fr | fromjson %}
+
+                  <label class="option">
+                    <input type="radio"
+                           name="a{{ q.id }}"
+                           value="{{ loop.index0 }}"
+                           required>
+                    <span>{{ option }}</span>
+                  </label>
+
+                {% endfor %}
+
+              </article>
+
+            {% endfor %}
+
+            <button class="btn primary" type="submit">
+              Enregistrer et corriger ↗
+            </button>
+
+          </form>
+
+        {% else %}
+
+          <div class="empty-note">
+            Aucun QCM validé n’est associé à ce chapitre.
+            Tu peux pratiquer dans
+            <a href="{{ url_for('qcm', domain=domain) }}">
+              le centre de QCM
+            </a>.
+          </div>
+
+        {% endif %}
+      </section>
+
+      <!-- REVISION -->
+      <section id="revision">
+
+        <h2>Résumé du chapitre</h2>
+
+        <div class="lesson-copy theory-body">
+          {{ lesson.summary_fr }}
+        </div>
+
+        <h2>Fiche de révision</h2>
+
+        <div class="revision-sheet theory-body">
+          {{ lesson.revision_fr }}
+        </div>
+
+      </section>
+
+    </article>
+  </div>
+
+  <!-- BOTTOM NAVIGATION -->
+  <div class="actions lesson-bottom">
+
+    {% if previous_lesson %}
+      <a class="btn ghost-light"
+         href="{{ url_for('lesson', slug=slug, lesson_id=previous_lesson.id) }}">
+        ← {{ previous_lesson.title }}
+      </a>
+    {% endif %}
+
+    <a href="{{ url_for('lesson', slug=subject.slug) }}">
+      Retour au parcours de {{ subject.name }}
+    </a>
+
+    {% if next_lesson %}
+      <a class="btn primary"
+         href="{{ url_for('lesson', slug=slug, lesson_id=next_lesson.id) }}">
+        {{ next_lesson.title }} →
+      </a>
+    {% endif %}
+
+  </div>
+
+</div>
+{% endblock %}
+
+
+{% block scripts %}
+<script>
+(() => {
+  "use strict";
+
+  /* READING PROGRESS */
+  const bar = document.getElementById("readingProgress");
+  const label = document.getElementById("readingPercent");
+  const body = document.querySelector(".lesson-content");
+
+  if (bar && label && body) {
+
+    function drawProgress() {
+      const rect = body.getBoundingClientRect();
+      const height = body.scrollHeight;
+
+      const read = Math.max(
+        0,
+        Math.min(height, window.innerHeight - rect.top)
+      );
+
+      const percent = height
+        ? Math.round((read / height) * 100)
+        : 0;
+
+      bar.style.width = percent + "%";
+      label.textContent = percent + "%";
+    }
+
+    window.addEventListener("scroll", drawProgress, { passive: true });
+    window.addEventListener("resize", drawProgress);
+
+    drawProgress();
+  }
+
+
+  /* COPY CODE */
+  document.querySelectorAll(".copy-code").forEach(button => {
+
+    button.addEventListener("click", async () => {
+
+      const container = button.closest(".code-container");
+      const codeElement = container?.querySelector("pre code");
+
+      if (!codeElement) return;
+
+      const code = codeElement.textContent;
+
+      try {
+
+        await navigator.clipboard.writeText(code);
+
+        const originalText = button.textContent;
+        button.textContent = "Copié ✓";
+        button.disabled = true;
+
+        setTimeout(() => {
+          button.textContent = originalText;
+          button.disabled = false;
+        }, 1500);
+
+      } catch (error) {
+
+        button.textContent = "Copie impossible";
+
+        setTimeout(() => {
+          button.textContent = "Copier le code";
+        }, 2000);
+
+      }
+
+    });
+
+  });
+
+})();
+</script>
+{% endblock %}
