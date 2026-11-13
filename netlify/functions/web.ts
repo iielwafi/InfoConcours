@@ -65,7 +65,17 @@ function readAssessment(token: string, purpose: AssessmentPayload["purpose"], us
   } catch { return null; }
 }
 function normalizeAnswer(value: string): string {
-  return value.normalize("NFKD").toLocaleLowerCase("fr").replace(/[\\u0300-\\u036f]/g, "").replace(/[^\\p{L}\\p{N}]+/gu, " ").trim().replace(/\\s+/g, " ");
+  const chars = Array.from(value.normalize("NFKD").toLocaleLowerCase("fr")).filter((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return !(code >= 0x300 && code <= 0x36f);
+  });
+  const cleaned = chars.map((ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    const asciiAlphaNumeric = (code >= 48 && code <= 57) || (code >= 97 && code <= 122);
+    if (code <= 127 && !asciiAlphaNumeric) return " ";
+    return ch;
+  }).join("");
+  return cleaned.trim().replace(/ +/g, " ");
 }
 function shortAnswerMatches(submitted: string, accepted: string[]): boolean {
   const normalized = normalizeAnswer(submitted);
@@ -306,10 +316,12 @@ export default async function handler(request: Request): Promise<Response> {
         }
         const token = csrfForPage(request, session).token;
         const body = '<section class="section"><div class="section-head"><div class="eyebrow">DIAGNOSTIC INITIAL</div><h2>Évalue ton niveau.</h2><p>Trois questions par domaine. Les résultats seront enregistrés dans ton compte.</p></div>' +
-          postForm("/diagnostic", token, hidden("question_ids", selected.map(q => q.id).join(",")) + selected.map(q => questionBlock(q, token)).join("") + btn("Terminer le diagnostic")) + '</section>';
+          postForm("/diagnostic", token, hidden("assessment_token", signAssessment("diagnostic", user.id, selected.map(q => Number(q.id)))) + selected.map(q => questionBlock(q, token)).join("") + btn("Terminer le diagnostic")) + '</section>';
         return pageResponse(request, user, session, "Diagnostic", body);
       }
-      const ids = val(form, "question_ids").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
+      const signed = readAssessment(val(form, "assessment_token"), "diagnostic", user.id);
+      if (!signed) return toNotice("/diagnostic", "Ce diagnostic a expiré. Relance une nouvelle série.", "error");
+      const ids = signed.ids;
       const qs = await getQuestions(sql, ids);
       const domains = await sql`SELECT name,weight FROM curriculum_subject WHERE published=TRUE ORDER BY position,name`;
       const scores: Row = {}; let total = 0;
@@ -427,11 +439,13 @@ export default async function handler(request: Request): Promise<Response> {
         const token = csrfForPage(request, session).token;
         const body = '<section class="section"><div class="section-head"><div class="eyebrow">ENTRAÎNEMENT</div><h2>Teste tes connaissances.</h2><p>Une série de 15 questions corrigées après soumission.</p></div>' +
           '<form method="get" action="/qcm">' + field("Matière (optionnel)", "domain") + field("Niveau (optionnel)", "level") + '<button class="btn ghost">Filtrer</button></form>' +
-          postForm("/qcm", token, hidden("question_ids", qs.map((q: Row) => q.id).join(",")) + qs.map((q: Row) => questionBlock(q, token)).join("") + btn("Corriger mes réponses")) +
+          postForm("/qcm", token, hidden("assessment_token", signAssessment("qcm", user.id, qs.map((q: Row) => Number(q.id)))) + qs.map((q: Row) => questionBlock(q, token)).join("") + btn("Corriger mes réponses")) +
           '</section>';
         return pageResponse(request, user, session, "Entraînement QCM", body);
       }
-      const ids = val(form, "question_ids").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
+      const signed = readAssessment(val(form, "assessment_token"), "qcm", user.id);
+      if (!signed) return toNotice("/qcm", "Cette série de QCM a expiré. Lance un nouvel entraînement.", "error");
+      const ids = signed.ids;
       const qs = await getQuestions(sql, ids);
       const details = qs.map((q) => detailsFor(q, form.has("a" + q.id) ? val(form, "a" + q.id) : null));
       if (!details.length) return toNotice("/qcm", "Aucune question valide n’a été soumise.", "error");
@@ -446,15 +460,16 @@ export default async function handler(request: Request): Promise<Response> {
       if (method === "GET") {
         const qs = await sql`SELECT id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar FROM question WHERE active=TRUE ORDER BY random() LIMIT 30`;
         const token = csrfForPage(request, session).token, started = Date.now();
-        const runId = createSession({ userId: user.id, role: user.role, language: session?.language ?? "fr" });
+        const assessmentToken = signAssessment("exam", user.id, qs.map((q: Row) => Number(q.id)), started);
         const body = '<section class="section"><div class="section-head"><div class="eyebrow">EXAMEN BLANC</div><h2>Simulation de concours.</h2><p>30 questions · ' + Math.max(5, Math.min(240, Number(process.env.EXAM_DURATION_MINUTES ?? 240))) + ' minutes.</p></div>' +
-          postForm("/exam", token, hidden("question_ids", qs.map((q: Row) => q.id).join(",")) + hidden("started_at", String(started)) + hidden("run_id", runId) + qs.map((q: Row) => questionBlock(q, token)).join("") + btn("Terminer l’examen")) + '</section>';
+          postForm("/exam", token, hidden("assessment_token", assessmentToken) + qs.map((q: Row) => questionBlock(q, token)).join("") + btn("Terminer l’examen")) + '</section>';
         return pageResponse(request, user, session, "Examen blanc", body);
       }
-      const start = Number(form.get("started_at"));
-      if (!Number.isFinite(start) || Date.now() - start > 6 * 60 * 60 * 1000 || !val(form, "run_id")) return toNotice("/exam", "Cette session d’examen a expiré. Lance un nouvel examen.", "error");
-      const ids = val(form, "question_ids").split(",").map(Number).filter((n) => Number.isInteger(n) && n > 0);
-      const qs = await getQuestions(sql, ids);
+      const signed = readAssessment(val(form, "assessment_token"), "exam", user.id, 6 * 60 * 60 * 1000);
+      if (!signed?.startedAt || Date.now() - signed.startedAt > 6 * 60 * 60 * 1000 || signed.startedAt > Date.now() + 60_000) return toNotice("/exam", "Cette session d’examen a expiré. Lance un nouvel examen.", "error");
+      const start = signed.startedAt;
+      const qs = await getQuestions(sql, signed.ids);
+      if (!qs.length) return toNotice("/exam", "Aucune question valide n’a été soumise.", "error");
       const elapsed = Math.max(0, Math.floor((Date.now() - start) / 60000));
       const limit = Math.max(5, Math.min(240, Number(process.env.EXAM_DURATION_MINUTES ?? 240)));
       const details = qs.map((q) => detailsFor(q, elapsed <= limit ? (form.has("a" + q.id) ? val(form, "a" + q.id) : null) : null));
