@@ -662,49 +662,89 @@ export default async function handler(request: Request): Promise<Response> {
       return toNotice("/courses/" + completeMatch[1] + "/lesson/" + lessonId, "Leçon marquée comme terminée.");
     }
 
-    const exerciseMatch = path.match(/^\/exercise\/(\d+)\/attempt$/);
+    const exerciseMatch = path.match(/^\\/exercise\\/(\\d+)\\/attempt$/);
     if (exerciseMatch && method === "POST") {
       const exerciseId = Number(exerciseMatch[1]), answer = String(form.get("answer") ?? "").trim();
       if (!answer || answer.length > 12000) return toNotice("/courses/continue", "Saisis une réponse de 1 à 12 000 caractères.", "error");
-      const rows = await sql`SELECT x.id,x.lesson_id,x.title,x.exercise_type,x.correct_answer,x.accepted_answers_json,x.feedback_fr,x.solution_fr,x.grading_guide_fr,x.learning_objective_fr,l.published AS lesson_published,c.published AS chapter_published,m.published AS module_published,s.published AS subject_published,s.slug FROM course_exercise x JOIN curriculum_lesson l ON l.id=x.lesson_id JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id JOIN curriculum_subject s ON s.id=m.subject_id WHERE x.id=${exerciseId} AND x.published=TRUE LIMIT 1`;
+      const rows = await sql`SELECT x.id,x.lesson_id,x.title,x.prompt_fr,x.exercise_type,x.options_json,x.correct_answer,x.accepted_answers_json,x.feedback_fr,x.solution_fr,x.grading_guide_fr,x.learning_objective_fr,l.published AS lesson_published,c.published AS chapter_published,m.published AS module_published,s.published AS subject_published,s.slug
+        FROM course_exercise x JOIN curriculum_lesson l ON l.id=x.lesson_id JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id JOIN curriculum_subject s ON s.id=m.subject_id
+        WHERE x.id=${exerciseId} AND x.published=TRUE LIMIT 1`;
       if (!rows.length) return response("<h1>404 · Exercice introuvable</h1>", 404);
       const x = rows[0] as Row;
       if (!x.lesson_published || !x.chapter_published || !x.module_published || !x.subject_published) return response("<h1>404 · Exercice indisponible</h1>", 404);
+
       const kind = String(x.exercise_type);
-      let score: number | null = null, status = "pending_manual", feedback = "Réponse transmise à un enseignant pour correction.";
+      let score: number | null = null, status = "ai_retry";
+      let feedback = "Le professeur IA n'a pas encore pu évaluer cette réponse. Réessaie dans un instant ou développe ton raisonnement.";
+      let correctAnswer = String(x.correct_answer ?? "");
+      let isCorrect = false;
+
       if (kind === "qcm") {
-        const correct = answer === String(x.correct_answer);
-        score = correct ? 100 : 0; status = "auto_graded"; feedback = String(x.feedback_fr || x.solution_fr || (correct ? "Bonne réponse." : "Réponse incorrecte."));
+        const options = parseJson(x.options_json, []);
+        const valid = /^\\d+$/.test(answer) && Number(answer) >= 0 && Number(answer) < options.length;
+        isCorrect = valid && answer === String(x.correct_answer);
+        correctAnswer = options[Number(x.correct_answer)] ?? correctAnswer;
+        score = isCorrect ? 100 : 0;
+        status = "auto_graded";
+        feedback = isCorrect ? String(x.feedback_fr || x.solution_fr || "Bonne réponse !") :
+          "Réponse incorrecte. La bonne réponse est : " + correctAnswer + ". " + String(x.feedback_fr || x.solution_fr || "");
       } else if (kind === "true_false") {
-        const correct = answer.toLowerCase() === String(x.correct_answer ?? "").toLowerCase();
-        score = correct ? 100 : 0; status = "auto_graded"; feedback = String(x.feedback_fr || x.solution_fr || (correct ? "Bonne réponse." : "Réponse incorrecte."));
+        isCorrect = answer.toLowerCase() === String(x.correct_answer ?? "").toLowerCase();
+        correctAnswer = String(x.correct_answer ?? "");
+        score = isCorrect ? 100 : 0;
+        status = "auto_graded";
+        feedback = isCorrect ? String(x.feedback_fr || x.solution_fr || "Bonne réponse !") :
+          "Réponse incorrecte. La bonne réponse est : " + correctAnswer + ". " + String(x.feedback_fr || x.solution_fr || "");
       } else if (kind === "short_answer") {
         const accepted = parseJson(x.accepted_answers_json, []).map((value: unknown) => String(value));
         if (x.correct_answer !== null && x.correct_answer !== undefined) accepted.push(String(x.correct_answer));
-        const correct = shortAnswerMatches(answer, accepted);
-        score = correct ? 100 : 0; status = "auto_graded"; feedback = String(x.feedback_fr || x.solution_fr || (correct ? "Bonne réponse." : "Réponse incorrecte."));
+        isCorrect = shortAnswerMatches(answer, accepted);
+        correctAnswer = accepted.join(" / ");
+        score = isCorrect ? 100 : 0;
+        status = "auto_graded";
+        feedback = isCorrect ? String(x.feedback_fr || x.solution_fr || "Bonne réponse !") :
+          "Réponse incorrecte. Voici les formes de réponse attendues : " + correctAnswer + ". " + String(x.feedback_fr || x.solution_fr || "");
       } else if (kind === "open") {
         try {
           const result = await evaluateOpenAnswer(x, answer);
           if (result.confidence >= 0.70) {
-            score = Number(result.score); status = "ai_graded";
+            score = Number(result.score);
+            status = "ai_graded";
             const labels: Record<string,string> = { correct: "Réponse correcte", partially_correct: "Réponse partiellement correcte", incorrect: "Réponse incorrecte" };
             const parts = [labels[String(result.classification)] + " — " + String(result.explanation_fr)];
             if (Array.isArray(result.missing_concepts) && result.missing_concepts.length) parts.push("Notions à compléter : " + result.missing_concepts.map(String).join(", "));
             if (result.expected_answer_fr) parts.push("Correction attendue : " + String(result.expected_answer_fr));
             feedback = parts.join("\\n\\n").slice(0, 8000);
           } else {
-            feedback = "Évaluation automatique incertaine; réponse transmise à un enseignant pour correction.";
+            status = "ai_retry";
+            feedback = "Je ne suis pas assez sûr pour noter cette réponse correctement. Ajoute les étapes de ton raisonnement ou reformule-la, puis renvoie-la.";
           }
         } catch (error) {
+          status = "ai_retry";
           const reason = error instanceof Error ? error.message : "provider_unavailable";
-          feedback = reason === "not_configured"
-            ? "Aucun évaluateur IA n’est configuré. Ta réponse est en attente de correction manuelle."
-            : "L’évaluateur IA est indisponible ou sa réponse n’a pas pu être validée. Ta réponse est en attente de correction manuelle.";
+          feedback = reason === "ai_not_configured" || reason === "not_configured"
+            ? "Le professeur IA n'est pas encore activé. L'administrateur doit ajouter OPENAI_API_KEY dans Netlify. Ta réponse n'a pas été notée."
+            : "Le professeur IA est momentanément indisponible. Ta réponse n'a pas été notée; réessaie plus tard.";
         }
       } else {
         return response("<h1>400 · Type d’exercice invalide</h1>", 400);
       }
+
+      if (!isCorrect && (kind === "qcm" || kind === "true_false" || kind === "short_answer") && process.env.OPENAI_API_KEY?.trim()) {
+        try {
+          feedback = await explainWrongAnswer({
+            title: String(x.title),
+            prompt: String(x.prompt_fr),
+            studentAnswer: answer,
+            correctAnswer,
+            referenceExplanation: String(x.solution_fr || x.feedback_fr || ""),
+            language: session?.language === "ar" ? "darija marocaine et arabe simple" : "français",
+          });
+        } catch {
+          // Keep the deterministic correction when the AI explanation service is unavailable.
+        }
+      }
+
       await sql`INSERT INTO exercise_attempt (user_id,exercise_id,submitted_answer,score,feedback,status) VALUES (${user.id},${exerciseId},${answer},${score},${feedback},${status})`;
       return redirect("/courses/" + encodeURIComponent(String(x.slug)) + "/lesson/" + Number(x.lesson_id) + "#exercise-" + exerciseId);
     }
