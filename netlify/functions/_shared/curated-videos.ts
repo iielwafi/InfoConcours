@@ -9,7 +9,7 @@ export type CuratedFrenchVideo = {
 /**
  * Curated YouTube suggestions for the 32-lesson curriculum.
  * Every item was matched to a French-language video result during research.
- * Imports are deliberately pending: an administrator must open, verify and publish each one.
+ * Student pages can render these as lesson-specific recommendations. Database imports remain pending until an administrator verifies and publishes them.
  */
 export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
   {
@@ -210,17 +210,17 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
   },
   {
     lessonTitle: "Numériser un signal audio",
-    title: "De l’analogique vers le numérique",
-    channel: "Ressource pédagogique BTS SNIR",
-    videoId: "wQUQk5QG630",
-    description: "Numérisation d’un signal analogique et bases de l’échantillonnage et de la quantification d’un signal acoustique."
+    title: "Numériser un signal audio : échantillonnage et quantification",
+    channel: "Florence RAFFIN la physique chimie au lycée",
+    videoId: "6ZcPe66i5aI",
+    description: "Présentation de la numérisation d’un signal audio, de l’échantillonnage et de la quantification."
   },
   {
     lessonTitle: "Distinguer codec et conteneur",
-    title: "Les codecs vidéo : le mystère de la compression",
-    channel: "Itsmecedlu",
-    videoId: "1KmYni-MePs",
-    description: "Rôle des codecs de compression vidéo, H.264, H.265/HEVC, ProRes et compromis entre taille et qualité."
+    title: "Codecs et conteneurs, du plus simple au plus complexe",
+    channel: "Mire",
+    videoId: "w9qmHTS9TCM",
+    description: "Explication progressive de la différence entre conteneur (MP4, MKV) et codec (H.264, AV1), avec exemples et conseils de choix."
   }
 ];
 
