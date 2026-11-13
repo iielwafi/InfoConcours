@@ -417,19 +417,49 @@ export default async function handler(request: Request): Promise<Response> {
 
     const exerciseMatch = path.match(/^\/exercise\/(\d+)\/attempt$/);
     if (exerciseMatch && method === "POST") {
-      const exerciseId = Number(exerciseMatch[1]), answer = val(form, "answer");
-      const rows = await sql`SELECT id,exercise_type,correct_answer,accepted_answers_json,feedback_fr,solution_fr FROM course_exercise WHERE id=${exerciseId} AND published=TRUE LIMIT 1`;
+      const exerciseId = Number(exerciseMatch[1]), answer = String(form.get("answer") ?? "").trim();
+      if (!answer || answer.length > 12000) return toNotice("/courses/continue", "Saisis une réponse de 1 à 12 000 caractères.", "error");
+      const rows = await sql`SELECT x.id,x.lesson_id,x.title,x.exercise_type,x.correct_answer,x.accepted_answers_json,x.feedback_fr,x.solution_fr,x.grading_guide_fr,x.learning_objective_fr,l.published AS lesson_published,c.published AS chapter_published,m.published AS module_published,s.published AS subject_published,s.slug FROM course_exercise x JOIN curriculum_lesson l ON l.id=x.lesson_id JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id JOIN curriculum_subject s ON s.id=m.subject_id WHERE x.id=${exerciseId} AND x.published=TRUE LIMIT 1`;
       if (!rows.length) return response("<h1>404 · Exercice introuvable</h1>", 404);
       const x = rows[0] as Row;
+      if (!x.lesson_published || !x.chapter_published || !x.module_published || !x.subject_published) return response("<h1>404 · Exercice indisponible</h1>", 404);
       const kind = String(x.exercise_type);
-      let score: number | null = null, status = "pending_manual", feedback = "Ta réponse a été envoyée pour correction.";
-      if (kind === "qcm" || kind === "true_false" || kind === "short_answer") {
-        const accepted = [String(x.correct_answer ?? ""), ...parseJson(x.accepted_answers_json, [])].map((v: any) => String(v).trim().toLowerCase()).filter(Boolean);
-        const ok = accepted.includes(answer.toLowerCase());
-        score = ok ? 100 : 0; status = "evaluated"; feedback = ok ? String(x.feedback_fr || "Bonne réponse.") : String(x.solution_fr || "Réponse incorrecte.");
+      let score: number | null = null, status = "pending_manual", feedback = "Réponse transmise à un enseignant pour correction.";
+      if (kind === "qcm") {
+        const correct = answer === String(x.correct_answer);
+        score = correct ? 100 : 0; status = "auto_graded"; feedback = String(x.feedback_fr || x.solution_fr || (correct ? "Bonne réponse." : "Réponse incorrecte."));
+      } else if (kind === "true_false") {
+        const correct = answer.toLowerCase() === String(x.correct_answer ?? "").toLowerCase();
+        score = correct ? 100 : 0; status = "auto_graded"; feedback = String(x.feedback_fr || x.solution_fr || (correct ? "Bonne réponse." : "Réponse incorrecte."));
+      } else if (kind === "short_answer") {
+        const accepted = parseJson(x.accepted_answers_json, []).map((value: unknown) => String(value));
+        if (x.correct_answer !== null && x.correct_answer !== undefined) accepted.push(String(x.correct_answer));
+        const correct = shortAnswerMatches(answer, accepted);
+        score = correct ? 100 : 0; status = "auto_graded"; feedback = String(x.feedback_fr || x.solution_fr || (correct ? "Bonne réponse." : "Réponse incorrecte."));
+      } else if (kind === "open") {
+        try {
+          const result = await evaluateOpenAnswer(x, answer);
+          if (result.confidence >= 0.70) {
+            score = Number(result.score); status = "ai_graded";
+            const labels: Record<string,string> = { correct: "Réponse correcte", partially_correct: "Réponse partiellement correcte", incorrect: "Réponse incorrecte" };
+            const parts = [labels[String(result.classification)] + " — " + String(result.explanation_fr)];
+            if (Array.isArray(result.missing_concepts) && result.missing_concepts.length) parts.push("Notions à compléter : " + result.missing_concepts.map(String).join(", "));
+            if (result.expected_answer_fr) parts.push("Correction attendue : " + String(result.expected_answer_fr));
+            feedback = parts.join("\\n\\n").slice(0, 8000);
+          } else {
+            feedback = "Évaluation automatique incertaine; réponse transmise à un enseignant pour correction.";
+          }
+        } catch (error) {
+          const reason = error instanceof Error ? error.message : "provider_unavailable";
+          feedback = reason === "not_configured"
+            ? "Aucun évaluateur IA n’est configuré. Ta réponse est en attente de correction manuelle."
+            : "L’évaluateur IA est indisponible ou sa réponse n’a pas pu être validée. Ta réponse est en attente de correction manuelle.";
+        }
+      } else {
+        return response("<h1>400 · Type d’exercice invalide</h1>", 400);
       }
       await sql`INSERT INTO exercise_attempt (user_id,exercise_id,submitted_answer,score,feedback,status) VALUES (${user.id},${exerciseId},${answer},${score},${feedback},${status})`;
-      return toNotice("/courses/continue", status === "pending" ? "Réponse envoyée à l’enseignant pour correction." : feedback);
+      return redirect("/courses/" + encodeURIComponent(String(x.slug)) + "/lesson/" + Number(x.lesson_id) + "#exercise-" + exerciseId);
     }
 
     if (path === "/qcm" && (method === "GET" || method === "POST")) {
