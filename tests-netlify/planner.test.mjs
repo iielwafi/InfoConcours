@@ -44,3 +44,8 @@ test("planner ignores malformed, empty and incomplete question details", () => {
 test("planner returns an empty list when a learner has no QCM history", () => {
   assert.deepEqual(summarizeAttemptDetails([]), []);
 });
+
+
+test("Pomodoro browser controller is safe to import without a browser DOM", async () => {
+  await import("../public/assets/pomodoro.js");
+});
