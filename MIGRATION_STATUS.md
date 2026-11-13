@@ -33,6 +33,15 @@
 - Route tests verify the AI tutor endpoints and absence of the old human correction route.
 - No live Gemini API call has been verified yet because `GEMINI_API_KEY` is not configured.
 
+## YouTube videos for lessons
+
+- Added a curated French-language video pack for **28 of the 32 published lessons**. Every suggestion is matched to the exact lesson title in the curriculum.
+- The admin page `/admin/videos` now has a bulk-import action. It creates the selected records as `pending`; no video is shown to students until an administrator verifies the link and publishes it.
+- The import is idempotent: existing YouTube video IDs are skipped, and a video already linked to another lesson is not reassigned.
+- Four lessons still need a suitable French video: `Comparer cache, RAM et stockage`, `Comparer sans se fier à un seul chiffre`, `Choisir un format d’image`, and `Comprendre couleur et taille d’image`. The admin page provides a direct YouTube search for each missing topic.
+- The curated pack is covered by tests for unique 11-character YouTube IDs and exact lesson-title matching. The current build passes TypeScript and all 14 automated tests.
+- The pack has **not yet been imported into Neon**. An administrator must sign into the preview, open Administration → Vidéos des leçons, and click the French bulk-import button. Imported suggestions remain pending until reviewed.
+
 ## Runtime and data safety
 
 - Neon PostgreSQL remains the database. No schema migration, data transfer, seed, or destructive production DB write has been run as part of this runtime migration.
