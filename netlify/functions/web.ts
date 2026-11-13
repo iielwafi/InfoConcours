@@ -1078,7 +1078,7 @@ export default async function handler(request: Request): Promise<Response> {
         }).join("");
         const missingCount = (lessons as Row[]).filter((l) => Number(l.verified_video_count) === 0).length;
         const body = section("Vidéos des leçons",
-          '<div class="video-admin-summary"><strong>' + (lessons as Row[]).length + ' leçons</strong><span>' + missingCount + ' sans vidéo publiée</span><span>' + ((lessons as Row[]).length - missingCount) avec vidéo publiée</span></div>' +
+          '<div class="video-admin-summary"><strong>' + (lessons as Row[]).length + ' leçons</strong><span>' + missingCount + ' sans vidéo publiée</span><span>' + ((lessons as Row[]).length - missingCount) + ' avec vidéo publiée</span></div>' +
           '<p class="muted">Ajoute une vidéo YouTube précise pour chaque leçon. Elle reste invisible aux apprenants tant qu’elle n’est pas vérifiée et publiée.</p>' +
           '<div class="panel video-admin-form"><h3>Ajouter une vidéo à une leçon</h3>' +
           postForm("/admin/videos", token,
