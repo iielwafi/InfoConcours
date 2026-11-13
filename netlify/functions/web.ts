@@ -571,7 +571,7 @@ export default async function handler(request: Request): Promise<Response> {
           description: video.description,
           curated: true,
         }));
-      const lessonVideos = [
+      const lessonVideos: Row[] = [
         ...storedVideoRows.map((video) => ({ ...video, curated: false })),
         ...curatedLessonVideos,
       ];
