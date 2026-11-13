@@ -715,8 +715,8 @@ body.dark .lesson-content #exercises .exercise-result-pending {
 }
 .video-admin-form form {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 13px 18px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 11px;
 }
 .video-admin-form form label {
   display: flex;
