@@ -1,7 +1,7 @@
 import type { Config } from "@netlify/functions";
-import { createHash } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { database } from "./_shared/database.js";
-import { createSession, cookieHeader, expiredCookieHeader } from "./_shared/session.js";
+import { createSession, readSession, cookieHeader, expiredCookieHeader } from "./_shared/session.js";
 import {
   currentUser, csrfForPage, csrfValid, escapeHtml, flashBox, page, redirect, response, withCookie,
 } from "./_shared/http.js";
@@ -38,6 +38,78 @@ const questionBlock = (q: Row, token: string, prefix = "a") => {
 };
 const questionSelect = "id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar";
 const cookieSecure = () => process.env.COOKIE_SECURE !== "0";
+
+type AssessmentPayload = { purpose: "diagnostic" | "qcm" | "exam"; userId: number; ids: number[]; issuedAt: number; startedAt?: number };
+function signAssessment(purpose: AssessmentPayload["purpose"], userId: number, ids: number[], startedAt?: number): string {
+  const secret = process.env.SECRET_KEY;
+  if (!secret || secret.length < 32) throw new Error("SECRET_KEY must contain at least 32 characters");
+  const payload: AssessmentPayload = { purpose, userId, ids, issuedAt: Date.now(), ...(startedAt ? { startedAt } : {}) };
+  const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const signature = createHmac("sha256", secret).update(encoded).digest("base64url");
+  return encoded + "." + signature;
+}
+function readAssessment(token: string, purpose: AssessmentPayload["purpose"], userId: number, maxAgeMs = 30 * 60 * 1000): AssessmentPayload | null {
+  try {
+    const secret = process.env.SECRET_KEY;
+    if (!secret || secret.length < 32) return null;
+    const [encoded, provided] = token.split(".");
+    if (!encoded || !provided) return null;
+    const expected = Buffer.from(createHmac("sha256", secret).update(encoded).digest("base64url"));
+    const actual = Buffer.from(provided);
+    if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) return null;
+    const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as AssessmentPayload;
+    if (payload.purpose !== purpose || payload.userId !== userId || !Array.isArray(payload.ids) || !payload.ids.length || payload.ids.length > 100) return null;
+    if (!payload.ids.every((id) => Number.isInteger(id) && id > 0) || !Number.isInteger(payload.issuedAt)) return null;
+    if (Date.now() - payload.issuedAt > maxAgeMs || payload.issuedAt > Date.now() + 60_000) return null;
+    return payload;
+  } catch { return null; }
+}
+function normalizeAnswer(value: string): string {
+  return value.normalize("NFKD").toLocaleLowerCase("fr").replace(/[\\u0300-\\u036f]/g, "").replace(/[^\\p{L}\\p{N}]+/gu, " ").trim().replace(/\\s+/g, " ");
+}
+function shortAnswerMatches(submitted: string, accepted: string[]): boolean {
+  const normalized = normalizeAnswer(submitted);
+  const numeric = Number(submitted.replace(",", "."));
+  return accepted.some((candidate) => {
+    if (normalized === normalizeAnswer(candidate)) return true;
+    const other = Number(String(candidate).replace(",", "."));
+    return submitted.trim() !== "" && Number.isFinite(numeric) && Number.isFinite(other) && numeric === other;
+  });
+}
+async function evaluateOpenAnswer(exercise: Row, answer: string): Promise<Row> {
+  const apiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error("not_configured");
+  const model = (process.env.EXERCISE_GRADING_MODEL || "gpt-4o-mini").trim();
+  const controller = AbortSignal.timeout(20_000);
+  const prompt = {
+    title: exercise.title,
+    question: exercise.prompt_fr,
+    expected_solution: exercise.solution_fr,
+    rubric: exercise.grading_guide_fr || "",
+    learning_objective: exercise.learning_objective_fr || "",
+    student_answer: answer,
+  };
+  const response = await fetch("https://api.openai.com/v1/responses", {
+    method: "POST",
+    signal: controller,
+    headers: { authorization: "Bearer " + apiKey, "content-type": "application/json" },
+    body: JSON.stringify({
+      model,
+      instructions: "Tu es un correcteur pédagogique prudent pour des exercices d’informatique. Évalue le sens, les concepts essentiels, le raisonnement et l’objectif pédagogique. N’invente pas de critères. Si la réponse ne permet pas une évaluation fiable, choisis une confiance basse. Réponds uniquement avec un objet JSON contenant score (0..100), classification (correct|partially_correct|incorrect), explanation_fr, missing_concepts (tableau), expected_answer_fr et confidence (0..1).",
+      input: JSON.stringify(prompt),
+      text: { format: { type: "json_object" } },
+      max_output_tokens: 700,
+    }),
+  });
+  if (!response.ok) throw new Error("provider_unavailable");
+  const payload = await response.json() as Row;
+  let text = "";
+  for (const item of payload.output ?? []) for (const part of item.content ?? []) if (part.type === "output_text") text = part.text;
+  const result = JSON.parse(text) as Row;
+  if (!Number.isFinite(result.score) || result.score < 0 || result.score > 100 || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1 || !["correct","partially_correct","incorrect"].includes(result.classification) || typeof result.explanation_fr !== "string") throw new Error("invalid_grading_result");
+  return result;
+}
+
 const authHash = (scope: string, identity: string) =>
   createHash("sha256").update(scope + "|" + identity).digest("hex");
 async function authBlocked(sql: any, key: string): Promise<boolean> {
@@ -658,4 +730,4 @@ export default async function handler(request: Request): Promise<Response> {
   }
 }
 
-export const config: Config = { path: "/*" };
+export const config: Config = { path: "/*", preferStatic: true };
