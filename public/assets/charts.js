@@ -3,9 +3,9 @@
   function prepare(canvas,draw){
     if(!canvas)return;
     const ctx=canvas.getContext('2d');let points=[];
-    function render(){const box=canvas.getBoundingClientRect(),dpr=window.devicePixelRatio||1,w=Math.max(280,box.width),h=Math.max(240,box.height);canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);points=draw(ctx,w,h)}
+    function render(){const dark=document.body.classList.contains('dark');palette.line=dark?'#9b94ff':'#6757e8';palette.fill=dark?'rgba(155,148,255,.2)':'rgba(103,87,232,.16)';palette.grid=dark?'#39445c':'#dfe2eb';palette.text=dark?'#a8b3c9':'#747b90';const box=canvas.getBoundingClientRect(),dpr=window.devicePixelRatio||1,w=Math.max(280,box.width),h=Math.max(240,box.height);canvas.width=w*dpr;canvas.height=h*dpr;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);points=draw(ctx,w,h)}
     canvas.addEventListener('pointermove',event=>{const rect=canvas.getBoundingClientRect(),x=event.clientX-rect.left,y=event.clientY-rect.top;let nearest=null,dist=Infinity;for(const p of points){const d=Math.hypot(p.x-x,p.y-y);if(d<dist){nearest=p;dist=d}}canvas.title=nearest&&dist<24?nearest.label:''});
-    new ResizeObserver(render).observe(canvas);render();
+    new ResizeObserver(render).observe(canvas);new MutationObserver(render).observe(document.body,{attributes:true,attributeFilter:['class']});render();
   }
   function radar(canvas,labels,values){
     prepare(canvas,(c,w,h)=>{const cx=w/2,cy=h/2,r=Math.min(w,h)*.31,n=labels.length,pts=[];if(!n)return pts;c.font='11px Arial';c.textAlign='center';c.textBaseline='middle';
