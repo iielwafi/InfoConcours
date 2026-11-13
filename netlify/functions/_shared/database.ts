@@ -1,7 +1,7 @@
 import { neon } from "@neondatabase/serverless";
 
 type QueryRows = Record<string, any>[];
-type NeonSqlTag = (strings: TemplateStringsArray, ...values: any[]) => Promise<QueryRows>;
+export type NeonSqlTag = (strings: TemplateStringsArray, ...values: any[]) => Promise<QueryRows>;
 
 let cachedUrl: string | undefined;
 let cachedClient: NeonSqlTag | undefined;
