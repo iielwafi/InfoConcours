@@ -1,4 +1,5 @@
 import type { Config } from "@netlify/functions";
+import { createHash } from "node:crypto";
 import { database } from "./_shared/database.js";
 import { createSession, cookieHeader, expiredCookieHeader } from "./_shared/session.js";
 import {
@@ -37,6 +38,24 @@ const questionBlock = (q: Row, token: string, prefix = "a") => {
 };
 const questionSelect = "id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar";
 const cookieSecure = () => process.env.COOKIE_SECURE !== "0";
+const authHash = (scope: string, identity: string) =>
+  createHash("sha256").update(scope + "|" + identity).digest("hex");
+async function authBlocked(sql: any, key: string): Promise<boolean> {
+  const rows = await sql`SELECT window_started,attempts FROM auth_throttle WHERE key=${key} LIMIT 1`;
+  if (!rows.length) return false;
+  if (Date.now() - new Date(String(rows[0].window_started)).getTime() > 15 * 60 * 1000) {
+    await sql`DELETE FROM auth_throttle WHERE key=${key}`;
+    return false;
+  }
+  return Number(rows[0].attempts) >= 10;
+}
+async function authFailure(sql: any, key: string): Promise<void> {
+  await sql`INSERT INTO auth_throttle (key,window_started,attempts) VALUES (${key},NOW(),1) ON CONFLICT (key) DO UPDATE SET attempts=CASE WHEN auth_throttle.window_started < NOW()-INTERVAL '15 minutes' THEN 1 ELSE auth_throttle.attempts+1 END,window_started=CASE WHEN auth_throttle.window_started < NOW()-INTERVAL '15 minutes' THEN NOW() ELSE auth_throttle.window_started END`;
+}
+async function clearAuthFailure(sql: any, keys: string[]): Promise<void> {
+  for (const key of keys) await sql`DELETE FROM auth_throttle WHERE key=${key}`;
+}
+
 
 async function pageResponse(request: Request, user: any, session: any, title: string, body: string, status = 200): Promise<Response> {
   const csrf = csrfForPage(request, session);
@@ -109,13 +128,16 @@ export default async function handler(request: Request): Promise<Response> {
 
     if (path === "/register" && method === "POST") {
       if (user) return redirect("/dashboard");
+      const ip = request.headers.get("x-nf-client-connection-ip") ?? (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
+      const registerKey = authHash("register", ip);
+      if (await authBlocked(sql, registerKey)) return response("<h1>429 · Trop de tentatives</h1><p>Réessaie dans 15 minutes.</p>", 429);
       const username = val(form, "username"), email = val(form, "email").toLowerCase();
       const password = String(form.get("password") ?? ""), confirm = String(form.get("confirm") ?? "");
       if (username.length < 3 || username.length > 40 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || password.length < 8 || password !== confirm) {
         return toNotice("/register", "Vérifie les champs : nom (3 caractères), email valide et mot de passe de 8 caractères minimum.", "error");
       }
       const found = await sql`SELECT id FROM "user" WHERE username = ${username} OR email = ${email} LIMIT 1`;
-      if (found.length) return toNotice("/register", "Nom d’utilisateur ou email déjà utilisé.", "error");
+      if (found.length) { await authFailure(sql, registerKey); return toNotice("/register", "Nom d’utilisateur ou email déjà utilisé.", "error"); }
       const rows = await sql`INSERT INTO "user" (username,email,password_hash,role) VALUES (${username},${email},${hashPassword(password)},${"student"}) RETURNING id,username,email,role`;
       const created = rows[0] as Row;
       const token = createSession({ userId: Number(created.id), role: "student", language: "fr" });
@@ -126,9 +148,17 @@ export default async function handler(request: Request): Promise<Response> {
     if (path === "/login" && method === "POST") {
       if (user) return redirect("/dashboard");
       const username = val(form, "username"), password = String(form.get("password") ?? "");
+      const ip = request.headers.get("x-nf-client-connection-ip") ?? (request.headers.get("x-forwarded-for") ?? "unknown").split(",")[0].trim();
+      const userKey = authHash("login-user", username.toLowerCase() + "|" + ip);
+      const ipKey = authHash("login-ip", ip);
+      if (await authBlocked(sql, userKey) || await authBlocked(sql, ipKey)) return response("<h1>429 · Trop de tentatives</h1><p>Réessaie dans 15 minutes.</p>", 429);
       const rows = await sql`SELECT id,username,email,password_hash,role FROM "user" WHERE username = ${username} LIMIT 1`;
       const found = rows[0] as Row | undefined;
-      if (!found || !verifyPassword(password, String(found.password_hash))) return toNotice("/login", "Identifiants incorrects.", "error");
+      if (!found || !verifyPassword(password, String(found.password_hash))) {
+        await authFailure(sql, userKey); await authFailure(sql, ipKey);
+        return toNotice("/login", "Identifiants incorrects.", "error");
+      }
+      await clearAuthFailure(sql, [userKey, ipKey]);
       const pref = await sql`SELECT language FROM user_preference WHERE user_id = ${Number(found.id)} LIMIT 1`;
       const token = createSession({ userId: Number(found.id), role: found.role === "admin" ? "admin" : "student", language: pref[0]?.language === "ar" ? "ar" : "fr" });
       return redirect("/dashboard", { "set-cookie": cookieHeader(token, cookieSecure()) });
