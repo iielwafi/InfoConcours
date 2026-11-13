@@ -2,6 +2,8 @@
 
 ## Current state
 
+- Netlify environment variables `DATABASE_URL` and `SECRET_KEY` have been entered in the site UI for Production, Deploy Previews, and Branch deploys, with the Functions scope enabled. A fresh Deploy Preview is required to consume the updated values; the previous health check ran before that redeploy.
+
 - Work is isolated on `migration/netlify-typescript`; production `main` has not been merged or changed.
 - Netlify Deploy Preview is still failing. GitHub exposes the Deploy log link, but not the log text. Do not merge or publish until that error is inspected and the preview passes.
 - `netlify/functions/web.ts` contains one consolidated handler (the duplicated trailing fragments that broke its syntax have been removed).
