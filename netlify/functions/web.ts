@@ -116,10 +116,10 @@ export default async function handler(request: Request): Promise<Response> {
       }
       const found = await sql`SELECT id FROM "user" WHERE username = ${username} OR email = ${email} LIMIT 1`;
       if (found.length) return toNotice("/register", "Nom d’utilisateur ou email déjà utilisé.", "error");
-      const rows = await sql`INSERT INTO "user" (username,email,password_hash,role) VALUES (${username},${email},${hashPassword(password)},"student") RETURNING id,username,email,role`;
+      const rows = await sql`INSERT INTO "user" (username,email,password_hash,role) VALUES (${username},${email},${hashPassword(password)},${"student"}) RETURNING id,username,email,role`;
       const created = rows[0] as Row;
       const token = createSession({ userId: Number(created.id), role: "student", language: "fr" });
-      await sql`INSERT INTO user_preference (user_id,language) VALUES (${Number(created.id)},"fr") ON CONFLICT (user_id) DO NOTHING`;
+      await sql`INSERT INTO user_preference (user_id,language) VALUES (${Number(created.id)},${"fr"}) ON CONFLICT (user_id) DO NOTHING`;
       return redirect("/dashboard", { "set-cookie": cookieHeader(token, cookieSecure()) });
     }
 
