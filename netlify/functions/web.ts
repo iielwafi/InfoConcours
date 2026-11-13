@@ -496,7 +496,11 @@ export default async function handler(request: Request): Promise<Response> {
       if (path === "/admin/videos" && method === "GET") {
         const rows = await sql`SELECT id,title,channel,video_id,language,lesson_key,verified,verification_status,active FROM video_resource ORDER BY created_at DESC LIMIT 100`;
         const token = csrfForPage(request, session).token;
-        const body = section("Gestion des vidéos", '<div class="feature-grid">' + rows.map((v: Row) => '<article class="feature"><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + ' · ' + e(v.lesson_key) + '</p><p>' + e(v.verification_status) + ' · ' + (v.active ? "Active" : "Inactive") + '</p></article>').join("") + '</div><h3>Ajouter une ressource</h3>' +
+        const body = section("Gestion des vidéos", '<div class="feature-grid">' + rows.map((v: Row) => '<article class="feature"><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + ' · ' + e(v.lesson_key) + '</p><p>' + e(v.verification_status) + ' · ' + (v.active ? "Active" : "Inactive") + '</p>' +
+          postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", v.verification_status === "verified" ? "pending" : "verify") + btn(v.verification_status === "verified" ? "Retirer la vérification" : "Vérifier")) +
+          postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", v.active ? "toggle" : "toggle") + btn(v.active ? "Désactiver" : "Activer")) +
+          postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", "reject") + btn("Rejeter")) +
+          '</article>').join("") + '</div><h3>Ajouter une ressource</h3>' +
           postForm("/admin/videos", token, field("Titre", "title", "text", "", true) + field("Chaîne", "channel", "text", "", true) + field("URL YouTube", "url", "url", "", true) + field("Matière / clé de leçon", "lesson_key", "text", "", true) + field("Langue", "language", "text", "Français", true) + btn("Ajouter en attente")) + '</section>');
         return pageResponse(request, user, session, "Gestion des vidéos", body);
       }
