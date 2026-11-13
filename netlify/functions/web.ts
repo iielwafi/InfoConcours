@@ -1,11 +1,11 @@
 import type { Config } from "@netlify/functions";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
-import { database } from "./_shared/database.js";
-import { createSession, readSession, cookieHeader, expiredCookieHeader } from "./_shared/session.js";
+import { database } from "./_shared/database.ts";
+import { createSession, readSession, cookieHeader, expiredCookieHeader } from "./_shared/session.ts";
 import {
   currentUser, csrfForPage, csrfValid, escapeHtml, flashBox, page, redirect, response, withCookie,
-} from "./_shared/http.js";
-import { hashPassword, verifyPassword } from "./_shared/password.js";
+} from "./_shared/http.ts";
+import { hashPassword, verifyPassword } from "./_shared/password.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
