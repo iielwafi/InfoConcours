@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests-netlify/*.test.mjs"
+    "test": "node --experimental-strip-types --test tests-netlify/*.test.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
