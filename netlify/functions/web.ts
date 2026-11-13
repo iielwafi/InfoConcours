@@ -419,10 +419,10 @@ export default async function handler(request: Request): Promise<Response> {
         return redirect("/courses/" + slug + "/lesson/" + lessonId);
       }
       await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${"lesson:" + lessonId},0) ON CONFLICT (user_id,lesson_key) DO UPDATE SET updated_at=NOW()`;
-      const exercises = await sql\`SELECT id,title,prompt_fr,prompt_ar,solution_fr,solution_ar,exercise_type,options_json,correct_answer,accepted_answers_json,feedback_fr,grading_guide_fr,learning_objective_fr,level FROM course_exercise WHERE lesson_id=\${lessonId} AND published=TRUE ORDER BY id\`;
+      const exercises = await sql`SELECT id,title,prompt_fr,prompt_ar,solution_fr,solution_ar,exercise_type,options_json,correct_answer,accepted_answers_json,feedback_fr,grading_guide_fr,learning_objective_fr,level FROM course_exercise WHERE lesson_id=${lessonId} AND published=TRUE ORDER BY id`;
       const exerciseIds = (exercises as Row[]).map((x) => Number(x.id));
       const rawExerciseAttempts = exerciseIds.length
-        ? await sql\`SELECT id,exercise_id,submitted_answer,score,feedback,status,created_at FROM exercise_attempt WHERE user_id=\${user.id} AND exercise_id=ANY(\${exerciseIds}::int[]) ORDER BY created_at DESC\`
+        ? await sql`SELECT id,exercise_id,submitted_answer,score,feedback,status,created_at FROM exercise_attempt WHERE user_id=${user.id} AND exercise_id=ANY(${exerciseIds}::int[]) ORDER BY created_at DESC`
         : [];
       const attemptsByExercise = new Map<number, Row[]>();
       for (const attempt of rawExerciseAttempts as Row[]) {
@@ -432,23 +432,23 @@ export default async function handler(request: Request): Promise<Response> {
         attemptsByExercise.set(key, current);
       }
 
-      const videos = await sql\`SELECT v.id,v.title,v.channel,v.video_id,v.language,v.duration_minutes,vm.description
+      const videos = await sql`SELECT v.id,v.title,v.channel,v.video_id,v.language,v.duration_minutes,vm.description
         FROM video_metadata vm JOIN video_resource v ON v.id=vm.video_id
-        WHERE (vm.lesson_id=\${lessonId} OR (vm.lesson_id IS NULL AND vm.chapter_id=\${Number(lesson.chapter_id)}))
+        WHERE (vm.lesson_id=${lessonId} OR (vm.lesson_id IS NULL AND vm.chapter_id=${Number(lesson.chapter_id)}))
           AND v.active=TRUE AND v.verified=TRUE AND v.verification_status='verified'
-        ORDER BY v.title\`;
+        ORDER BY v.title`;
       const videoIds = (videos as Row[]).map((v) => Number(v.id));
       const watchedRows = videoIds.length
-        ? await sql\`SELECT video_id FROM video_watch WHERE user_id=\${user.id} AND video_id=ANY(\${videoIds}::int[])\`
+        ? await sql`SELECT video_id FROM video_watch WHERE user_id=${user.id} AND video_id=ANY(${videoIds}::int[])`
         : [];
       const watchedVideoIds = new Set((watchedRows as Row[]).map((v) => Number(v.video_id)));
 
-      const qs = await sql\`SELECT q.id,q.domain,q.topic,q.level,q.prompt_fr,q.prompt_ar,q.options_fr,q.options_ar,q.answer,q.explanation_fr,q.explanation_ar,qm.learning_objective
+      const qs = await sql`SELECT q.id,q.domain,q.topic,q.level,q.prompt_fr,q.prompt_ar,q.options_fr,q.options_ar,q.answer,q.explanation_fr,q.explanation_ar,qm.learning_objective
         FROM question q JOIN question_metadata qm ON qm.question_id=q.id
-        WHERE qm.chapter_id=\${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id\`;
+        WHERE qm.chapter_id=${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id`;
       const csrf = csrfForPage(request, session).token;
-      const lessonProgress = await sql\`SELECT evidence_count FROM lesson_progress WHERE user_id=\${user.id} AND lesson_key=\${"lesson:" + lessonId} LIMIT 1\`;
-      const completion = await sql\`SELECT id FROM lesson_completion WHERE user_id=\${user.id} AND lesson_id=\${lessonId} LIMIT 1\`;
+      const lessonProgress = await sql`SELECT evidence_count FROM lesson_progress WHERE user_id=${user.id} AND lesson_key=${"lesson:" + lessonId} LIMIT 1`;
+      const completion = await sql`SELECT id FROM lesson_completion WHERE user_id=${user.id} AND lesson_id=${lessonId} LIMIT 1`;
 
       const videoHtml = (videos as Row[]).length
         ? '<div class="lesson-video-list">' + (videos as Row[]).map((v) =>
