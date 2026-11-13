@@ -485,6 +485,42 @@ export default async function handler(request: Request): Promise<Response> {
 
     if (path.startsWith("/admin")) {
       if (user.role !== "admin") return adminRequired();
+      if (path === "/admin" && method === "POST") {
+        const action = val(form, "action");
+        if (action === "toggle_question") {
+          const questionId = Number(form.get("question_id"));
+          await sql`UPDATE question SET active=NOT active WHERE id=${questionId}`;
+          return redirect("/admin");
+        }
+        if (action === "set_role") {
+          const targetId = Number(form.get("user_id")), role = val(form, "role");
+          if (!Number.isInteger(targetId) || !["student", "admin"].includes(role) || targetId === user.id) {
+            return toNotice("/admin", "Modification de rôle invalide.", "error");
+          }
+          await sql`UPDATE "user" SET role=${role} WHERE id=${targetId}`;
+          return redirect("/admin");
+        }
+        if (action === "create_question") {
+          const domain = val(form, "domain"), topic = val(form, "topic"), level = val(form, "level"), prompt = val(form, "prompt_fr"), explanation = val(form, "explanation_fr");
+          const options = [0,1,2,3].map(i => val(form, "option_" + i));
+          const answer = Number(form.get("answer")), chapterId = Number(form.get("chapter_id"));
+          const objective = val(form, "learning_objective").slice(0,400), timeLimitRaw = val(form, "time_limit_seconds");
+          const timeLimit = timeLimitRaw ? Number(timeLimitRaw) : null;
+          if (!domain || !topic || !prompt || !explanation || !objective || new Set(options).size !== 4 || options.some(x => !x) || !Number.isInteger(answer) || answer < 0 || answer > 3 || !Number.isInteger(chapterId) || (timeLimit !== null && (!Number.isInteger(timeLimit) || timeLimit < 5 || timeLimit > 7200))) {
+            return toNotice("/admin", "Question invalide : complète la matière, le chapitre, les quatre choix et la correction.", "error");
+          }
+          const chapters = await sql`SELECT c.id,s.name AS domain FROM curriculum_chapter c JOIN curriculum_module m ON m.id=c.module_id JOIN curriculum_subject s ON s.id=m.subject_id WHERE c.id=${chapterId} LIMIT 1`;
+          if (!chapters.length || chapters[0].domain !== domain) return toNotice("/admin", "Le chapitre ne correspond pas à la matière sélectionnée.", "error");
+          const duplicates = await sql`SELECT id FROM question WHERE domain=${domain} AND prompt_fr=${prompt} LIMIT 1`;
+          if (duplicates.length) return toNotice("/admin", "Cette question existe déjà.", "error");
+          const created = await sql`INSERT INTO question (domain,topic,level,prompt_fr,prompt_ar,options_fr,options_ar,answer,explanation_fr,explanation_ar,active) VALUES (${domain},${topic.slice(0,120)},${level},${prompt},${val(form,"prompt_ar")},${JSON.stringify(options)},${JSON.stringify(options)},${answer},${explanation},${val(form,"explanation_ar")},FALSE) RETURNING id`;
+          const lesson = await sql`SELECT id FROM curriculum_lesson WHERE chapter_id=${chapterId} ORDER BY id LIMIT 1`;
+          await sql`INSERT INTO question_metadata (question_id,chapter_id,lesson_id,time_limit_seconds,learning_objective) VALUES (${Number(created[0].id)},${chapterId},${lesson[0]?.id ?? null},${timeLimit},${objective})`;
+          return toNotice("/admin", "Question créée en brouillon. Active-la après relecture.");
+        }
+        return response("<h1>400 · Action invalide</h1>", 400);
+      }
+
       if (path === "/admin" && method === "GET") {
         const [counts, recent, questions] = await Promise.all([
           sql`SELECT (SELECT COUNT(*) FROM "user") AS users,(SELECT COUNT(*) FROM question WHERE active=TRUE) AS questions,(SELECT COUNT(*) FROM attempt) AS attempts,(SELECT COUNT(*) FROM curriculum_lesson WHERE published=TRUE) AS lessons`,
