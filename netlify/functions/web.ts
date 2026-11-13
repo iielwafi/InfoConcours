@@ -623,9 +623,6 @@ export default async function handler(request: Request): Promise<Response> {
                     : "exercise-result-incorrect";
                 result = '<div class="exercise-result ' + tone + '">' + e(attempt.feedback || state) + '</div>';
               }
-              const explanation = attempt.feedback && attempt.status !== "pending_manual"
-                ? '<p><b>Explication :</b> ' + e(attempt.feedback) + '</p>'
-                : "";
               const solution = attempt.status !== "pending_manual" && attempt.status !== "ai_retry" && attempt.status !== "ai_graded" && x.solution_fr
                 ? '<details><summary>Voir la correction complète</summary><div class="theory-body">' + e(x.solution_fr) + '</div>' +
                   (x.solution_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.solution_ar) + '</div>' : '') +
@@ -635,7 +632,7 @@ export default async function handler(request: Request): Promise<Response> {
                 ? '<a class="btn ghost ai-explain-link" href="/tutor?lesson_id=' + lessonId + '&exercise_id=' + Number(x.id) + '">Demander au professeur IA</a>'
                 : "";
               return '<div class="exercise-feedback"><div class="qmeta"><span>' + e(formatDate(attempt.created_at)) + '</span><span>' + state + score + '</span></div>' +
-                '<p><b>Ta réponse :</b> ' + e(attempt.submitted_answer) + '</p>' + result + explanation + solution + askAi + '</div>';
+                '<p><b>Ta réponse :</b> ' + e(attempt.submitted_answer) + '</p>' + result + solution + askAi + '</div>';
             }).join("");
 
             return '<article class="exercise-card" id="exercise-' + e(x.id) + '">' +
