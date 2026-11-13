@@ -18,7 +18,6 @@ test("curated French lesson videos contain valid unique YouTube IDs and lesson n
 
 test("only explicitly researched gaps remain outside the import pack", () => {
   assert.deepEqual([...MISSING_FRENCH_VIDEO_LESSONS], [
-    "Décomposer un problème et analyser son coût",
     "Comparer sans se fier à un seul chiffre",
     "Comprendre couleur et taille d’image",
   ]);
