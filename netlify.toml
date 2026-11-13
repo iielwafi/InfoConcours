@@ -1,13 +1,10 @@
 [build]
+  command = "npm run build"
   publish = "public"
   functions = "netlify/functions"
 
 [functions]
   node_bundler = "esbuild"
 
-# Only enable the health endpoint during the migration bootstrap.
-# The application-wide rewrite is intentionally added after route parity is complete.
-[[redirects]]
-  from = "/api/health"
-  to = "/.netlify/functions/health"
-  status = 200
+# Function routes are declared with each function's exported config.path.
+# The application-wide rewrite stays disabled until Flask route parity is complete.
