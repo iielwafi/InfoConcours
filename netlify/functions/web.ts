@@ -875,14 +875,14 @@ export default async function handler(request: Request): Promise<Response> {
       ]);
       const reviewStats = summarizeAttemptDetails(attemptRows as Row[]);
       const statsByDomain = new Map(reviewStats.map((item) => [item.domain, item]));
-      const plans = (subjects as Row[]).map((subject) => ({
+      const plans: Row[] = (subjects as Row[]).map((subject) => ({
         ...subject,
         stats: statsByDomain.get(String(subject.name)) ?? null,
       }));
-      const reviewed = plans
-        .filter((subject) => subject.stats)
+      const reviewed: Row[] = plans
+        .filter((subject): boolean => Boolean(subject.stats))
         .sort((a, b) => Number(a.stats!.average) - Number(b.stats!.average));
-      const notYetReviewed = plans.filter((subject) => !subject.stats);
+      const notYetReviewed: Row[] = plans.filter((subject): boolean => !subject.stats);
       const dailyGoal = Math.max(15, Math.min(720, Number(goalRows[0]?.daily_minutes ?? 60)));
       const todayMinutes = Math.max(0, Number(todayRows[0]?.minutes ?? 0));
       const todayPercent = Math.min(100, Math.round(todayMinutes * 100 / dailyGoal));
