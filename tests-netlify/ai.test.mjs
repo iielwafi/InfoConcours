@@ -44,7 +44,7 @@ test("Gemini is preferred and receives a JSON-mode grading request", async () =>
       input: '{"student_answer":"test"}',
     });
     assert.equal(output, '{"score":90,"confidence":0.95}');
-    assert.match(requestedUrl, /models\/gemini-3\.8-flash:generateContent$/);
+    assert.match(requestedUrl, /models\/gemini-3\.5-flash-lite:generateContent$/);
     assert.equal(requestInit.headers["x-goog-api-key"], "test-gemini-key");
     assert.equal(requestInit.headers.authorization, undefined);
     const body = JSON.parse(requestInit.body);
