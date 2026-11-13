@@ -759,7 +759,7 @@ export default async function handler(request: Request): Promise<Response> {
         }
       }
 
-      await sql`INSERT INTO exercise_attempt (user_id,exercise_id,submitted_answer,score,feedback,status) VALUES (${user.id},${exerciseId},${answer},${score},${feedback},${status})`;
+      await sql`INSERT INTO exercise_attempt (user_id,exercise_id,submitted_answer,score,feedback,status,created_at) VALUES (${user.id},${exerciseId},${answer},${score},${feedback},${status},NOW())`;
       return redirect("/courses/" + encodeURIComponent(String(x.slug)) + "/lesson/" + Number(x.lesson_id) + "#exercise-" + exerciseId);
     }
 
