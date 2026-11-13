@@ -25,7 +25,7 @@
       const max=Math.max(1,Math.ceil(largest*2)/2);
       const step=max<=2?0.5:max<=5?1:Math.ceil(max/5);
       c.font='10px Arial';c.textAlign='right';c.textBaseline='middle';
-      for(let tick=0;tick<=max+0.0001;tick+=step){const y=top+ch*(1-tick/max);c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.strokeStyle=palette.grid;c.stroke();c.fillStyle=palette.text;c.fillText(String(Number(tick.toFixed(1))),left-7,y)}
+      for(let tick=0;tick<=max+0.0001;tick+=step){const y=top+ch*(1-tick/max);c.beginPath();c.moveTo(left,y);c.lineTo(w-right,y);c.strokeStyle=palette.grid;c.stroke();c.fillStyle=palette.text;c.fillText(String(Number(tick.toFixed(1)))+unit,left-7,y)}
       if(!n)return pts;
       const slot=cw/n,barWidth=Math.min(42,slot*.56);
       values.forEach((raw,i)=>{const v=Math.max(0,Number(raw)||0),barHeight=ch*v/max,x=left+slot*(i+.5)-barWidth/2,y=top+ch-barHeight;
