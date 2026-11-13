@@ -419,26 +419,131 @@ export default async function handler(request: Request): Promise<Response> {
         return redirect("/courses/" + slug + "/lesson/" + lessonId);
       }
       await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${"lesson:" + lessonId},0) ON CONFLICT (user_id,lesson_key) DO UPDATE SET updated_at=NOW()`;
-      const exercises = await sql`SELECT id,title,prompt_fr,prompt_ar,solution_fr,solution_ar,exercise_type,options_json,correct_answer,accepted_answers_json,feedback_fr,level FROM course_exercise WHERE lesson_id=${lessonId} AND published=TRUE ORDER BY id`;
-      const exerciseIds = exercises.map((x: Row) => {
-          const kind = String(x.exercise_type), options = parseJson(x.options_json, []);
-          let answer = kind === "qcm"
-            ? options.map((option: string, index: number) => '<label class="option"><input type="radio" name="answer" value="' + index + '" required> ' + e(option) + '</label>').join("")
-            : kind === "true_false"
-              ? '<label class="option"><input type="radio" name="answer" value="true" required> Vrai</label><label class="option"><input type="radio" name="answer" value="false" required> Faux</label>'
-              : kind === "open"
-                ? '<label>Ta réponse</label><textarea class="field" name="answer" rows="5" maxlength="12000" required></textarea><p class="notice">' + (process.env.OPENAI_API_KEY ? "Évaluation IA; les réponses incertaines restent en correction manuelle." : "Pas de correcteur IA configuré : la réponse sera corrigée par un enseignant.") + '</p>'
-                : field("Ta réponse", "answer", "text", "", true);
-          const history = (attemptsByExercise.get(Number(x.id)) ?? []).map((a: Row) => {
-            const state = a.status === "pending_manual" ? "En attente de correction" : a.status === "ai_graded" ? "Évaluée par l’IA" : a.status === "auto_graded" ? "Correction automatique" : "Corrigée par un enseignant";
-            const tone = a.status === "pending_manual" ? "exercise-result-pending" : Number(a.score) >= 100 ? "exercise-result-correct" : Number(a.score) > 0 ? "exercise-result-pending" : "exercise-result-incorrect";
-            return '<div class="exercise-feedback"><div class="qmeta"><span>' + e(formatDate(a.created_at)) + '</span><span>' + state + (a.score !== null ? ' · ' + Math.round(Number(a.score)) + ' %' : '') + '</span></div><p><b>Ta réponse :</b> ' + e(a.submitted_answer) + '</p>' + (a.feedback ? '<div class="exercise-result ' + tone + '">' + e(a.feedback) + '</div>' : '') + (a.status !== "pending_manual" && x.solution_fr ? '<details><summary>Voir la correction complète</summary><div class="theory-body">' + e(x.solution_fr) + '</div></details>' : '') + '</div>';
-          }).join("");
-          return '<article class="feature exercise-card" id="exercise-' + e(x.id) + '"><div class="eyebrow">' + e(kind === "qcm" ? "QCM" : kind === "true_false" ? "Vrai / faux" : kind === "short_answer" ? "Réponse courte" : "Réponse ouverte") + ' · ' + e(x.level) + '</div><h3>' + e(x.title) + '</h3><p>' + e(x.prompt_fr) + '</p>' + (x.prompt_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.prompt_ar) + '</div>' : '') + postForm("/exercise/" + x.id + "/attempt", csrf, answer + btn("Envoyer ma réponse")) + history + '</article>';
-        }).join("")) + '</div>' : '<p class="muted">Aucune vidéo vérifiée pour cette leçon.</p>') +
-        '<h3>Exercices</h3><div class="feature-grid">' + exercises.map((x: Row) => '<article class="feature"><div class="eyebrow">' + e(x.level) + ' · ' + e(x.exercise_type) + '</div><h3>' + e(x.title) + '</h3><p>' + e(x.prompt_fr) + '</p>' + postForm("/exercise/" + x.id + "/attempt", csrf, field("Ta réponse", "answer", "text", "", true) + hidden("exercise_id", String(x.id)) + btn("Envoyer ma réponse")) + '</article>').join("") + '</div>' +
-        (qs.length ? '<h3>Vérifie tes acquis</h3>' + postForm("/courses/" + slug + "/lesson/" + lessonId, csrf, qs.map((q: Row) => questionBlock(q, csrf)).join("") + btn("Envoyer le QCM")) : "") +
-        '<div class="actions"><a class="btn ghost" href="/courses/' + encodeURIComponent(slug) + '">Retour à la matière</a>' + postForm("/courses/" + slug + "/lesson/" + lessonId + "/complete", csrf, btn("Marquer comme terminée")) + '</div></section>';
+      const exercises = await sql\`SELECT id,title,prompt_fr,prompt_ar,solution_fr,solution_ar,exercise_type,options_json,correct_answer,accepted_answers_json,feedback_fr,grading_guide_fr,learning_objective_fr,level FROM course_exercise WHERE lesson_id=\${lessonId} AND published=TRUE ORDER BY id\`;
+      const exerciseIds = (exercises as Row[]).map((x) => Number(x.id));
+      const rawExerciseAttempts = exerciseIds.length
+        ? await sql\`SELECT id,exercise_id,submitted_answer,score,feedback,status,created_at FROM exercise_attempt WHERE user_id=\${user.id} AND exercise_id=ANY(\${exerciseIds}::int[]) ORDER BY created_at DESC\`
+        : [];
+      const attemptsByExercise = new Map<number, Row[]>();
+      for (const attempt of rawExerciseAttempts as Row[]) {
+        const key = Number(attempt.exercise_id);
+        const current = attemptsByExercise.get(key) ?? [];
+        if (current.length < 5) current.push(attempt);
+        attemptsByExercise.set(key, current);
+      }
+
+      const videos = await sql\`SELECT v.id,v.title,v.channel,v.video_id,v.language,v.duration_minutes,vm.description
+        FROM video_metadata vm JOIN video_resource v ON v.id=vm.video_id
+        WHERE (vm.lesson_id=\${lessonId} OR (vm.lesson_id IS NULL AND vm.chapter_id=\${Number(lesson.chapter_id)}))
+          AND v.active=TRUE AND v.verified=TRUE AND v.verification_status='verified'
+        ORDER BY v.title\`;
+      const videoIds = (videos as Row[]).map((v) => Number(v.id));
+      const watchedRows = videoIds.length
+        ? await sql\`SELECT video_id FROM video_watch WHERE user_id=\${user.id} AND video_id=ANY(\${videoIds}::int[])\`
+        : [];
+      const watchedVideoIds = new Set((watchedRows as Row[]).map((v) => Number(v.video_id)));
+
+      const qs = await sql\`SELECT q.id,q.domain,q.topic,q.level,q.prompt_fr,q.prompt_ar,q.options_fr,q.options_ar,q.answer,q.explanation_fr,q.explanation_ar,qm.learning_objective
+        FROM question q JOIN question_metadata qm ON qm.question_id=q.id
+        WHERE qm.chapter_id=\${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id\`;
+      const csrf = csrfForPage(request, session).token;
+      const lessonProgress = await sql\`SELECT evidence_count FROM lesson_progress WHERE user_id=\${user.id} AND lesson_key=\${"lesson:" + lessonId} LIMIT 1\`;
+      const completion = await sql\`SELECT id FROM lesson_completion WHERE user_id=\${user.id} AND lesson_id=\${lessonId} LIMIT 1\`;
+
+      const videoHtml = (videos as Row[]).length
+        ? '<div class="lesson-video-list">' + (videos as Row[]).map((v) =>
+            '<article class="lesson-video"><div class="video-frame"><iframe src="https://www.youtube-nocookie.com/embed/' + e(v.video_id) + '" title="' + e(v.title) + ' — ' + e(v.channel) + '" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>' +
+            '<div class="qmeta"><span>' + e(v.language) + '</span><span>' + (v.duration_minutes ? e(v.duration_minutes) + ' min' : 'Durée non renseignée') + '</span></div>' +
+            '<h3>' + e(v.title) + '</h3><p class="muted">' + e(v.channel) + '</p>' +
+            (v.description ? '<p>' + e(v.description) + '</p>' : '') +
+            postForm("/videos/" + v.id + "/watched", csrf, hidden("next", "/courses/" + slug + "/lesson/" + lessonId) + btn(watchedVideoIds.has(Number(v.id)) ? "Visionnée ✓" : "Marquer comme visionnée")) +
+            '</article>'
+          ).join("") + '</div>'
+        : '<div class="empty-note"><b>Aucune vidéo vérifiée pour ce chapitre, pour le moment.</b><p class="muted">Une vidéo apparaîtra après validation par l’administration.</p><a href="/videos">Consulter les autres vidéos validées ↗</a></div>';
+
+      const exerciseHtml = (exercises as Row[]).length
+        ? (exercises as Row[]).map((x) => {
+            const kind = String(x.exercise_type);
+            const options = parseJson(x.options_json, []);
+            let answerField = "";
+            if (kind === "qcm") {
+              answerField = options.map((option: string, index: number) =>
+                '<label class="option"><input type="radio" name="answer" value="' + index + '" required><span>' + e(option) + '</span></label>'
+              ).join("");
+            } else if (kind === "true_false") {
+              answerField = '<label class="option"><input type="radio" name="answer" value="true" required><span>Vrai</span></label><label class="option"><input type="radio" name="answer" value="false" required><span>Faux</span></label>';
+            } else if (kind === "short_answer") {
+              answerField = field("Ta réponse", "answer", "text", "", true);
+            } else {
+              answerField = '<p class="notice">' +
+                (process.env.OPENAI_API_KEY
+                  ? "Cette réponse sera transmise au service d’évaluation IA. Les réponses incertaines restent à corriger par un enseignant."
+                  : "Aucun correcteur sémantique n’est configuré : cette réponse sera transmise à un enseignant pour correction manuelle.") +
+                '</p><label>Ta réponse</label><textarea class="field" name="answer" maxlength="12000" rows="5" required></textarea>';
+            }
+
+            const history = (attemptsByExercise.get(Number(x.id)) ?? []).map((attempt) => {
+              const state = attempt.status === "pending_manual"
+                ? "En attente de correction"
+                : attempt.status === "ai_graded"
+                  ? "Évaluée par l’IA · à vérifier si nécessaire"
+                  : attempt.status === "auto_graded"
+                    ? "Correction automatique"
+                    : "Corrigée par un enseignant";
+              const score = attempt.score === null || attempt.score === undefined
+                ? ""
+                : " · " + Math.round(Number(attempt.score)) + " %";
+              let result = "";
+              if (attempt.status === "pending_manual") {
+                result = '<div class="exercise-result exercise-result-pending">' + e(attempt.feedback || "Réponse en attente de correction par l'équipe pédagogique.") + '</div>';
+              } else if (attempt.status === "manually_graded") {
+                result = '<div class="exercise-result exercise-result-pending"><strong>Correction de l’enseignant · ' + e(Math.round(Number(attempt.score))) + ' %</strong></div>';
+              } else if (attempt.status === "ai_graded" || attempt.status === "auto_graded") {
+                const tone = Number(attempt.score) >= 100
+                  ? "exercise-result-correct"
+                  : Number(attempt.score) > 0
+                    ? "exercise-result-pending"
+                    : "exercise-result-incorrect";
+                result = '<div class="exercise-result ' + tone + '">' + e(attempt.feedback || state) + '</div>';
+              }
+              const explanation = attempt.feedback && attempt.status !== "pending_manual"
+                ? '<p><b>Explication :</b> ' + e(attempt.feedback) + '</p>'
+                : "";
+              const solution = attempt.status !== "pending_manual" && attempt.status !== "ai_graded" && x.solution_fr
+                ? '<details><summary>Voir la correction complète</summary><div class="theory-body">' + e(x.solution_fr) + '</div>' +
+                  (x.solution_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.solution_ar) + '</div>' : '') +
+                  '</details>'
+                : "";
+              return '<div class="exercise-feedback"><div class="qmeta"><span>' + e(formatDate(attempt.created_at)) + '</span><span>' + state + score + '</span></div>' +
+                '<p><b>Ta réponse :</b> ' + e(attempt.submitted_answer) + '</p>' + result + explanation + solution + '</div>';
+            }).join("");
+
+            return '<article class="exercise-card" id="exercise-' + e(x.id) + '">' +
+              '<div class="qmeta"><span>' + e(kind === "qcm" ? "QCM" : kind === "true_false" ? "Vrai / faux" : kind === "short_answer" ? "Réponse courte" : "Correction manuelle") + '</span><span>' + e(x.level) + '</span></div>' +
+              '<h3>' + e(x.title) + '</h3><div class="exercise-prompt">' + e(x.prompt_fr) + '</div>' +
+              (x.prompt_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.prompt_ar) + '</div>' : '') +
+              (x.learning_objective_fr ? '<p class="muted"><b>Objectif :</b> ' + e(x.learning_objective_fr) + '</p>' : '') +
+              postForm("/exercise/" + x.id + "/attempt", csrf, answerField + btn("Envoyer la réponse")) + history +
+              '</article>';
+          }).join("")
+        : '<div class="empty-note">Aucun exercice dédié n’est publié pour cette leçon. Tu peux utiliser le QCM de chapitre ci-dessous.</div>';
+
+      const body = '<section class="section lesson-reading" id="lessonTop">' +
+        '<div class="eyebrow"><a href="/courses">ACADÉMIE</a> · ' + e(lesson.subject_name) + ' · ' + e(lesson.module_title) + '</div>' +
+        '<h1>' + e(lesson.title) + '</h1><p class="muted">Chapitre : ' + e(lesson.chapter_title) + ' · Ressource de préparation.</p>' +
+        '<div class="actions lesson-nav">' + (completion.length ? '<span class="tag">Leçon terminée ✓</span>' : postForm("/courses/" + slug + "/lesson/" + lessonId + "/complete", csrf, btn("Marquer comme terminée"))) + '</div>' +
+        '<div class="lesson-layout"><aside class="panel lesson-toc"><div class="eyebrow">DANS CETTE LEÇON</div><a href="#objectifs">Objectifs</a><a href="#explication">Explication</a><a href="#exemple">Exemple pratique</a><a href="#videos">Vidéos vérifiées</a><a href="#exercises">Exercices</a><a href="#quiz">QCM du chapitre</a><a href="#revision">Résumé et révision</a><small class="muted">Progression : ' + e(lessonProgress[0]?.evidence_count ?? 0) + ' réponses contributives</small></aside>' +
+        '<article class="panel lesson-content">' +
+        '<section id="objectifs"><div class="eyebrow">OBJECTIFS D’APPRENTISSAGE</div><ul>' + parseJson(lesson.objectives_fr, []).map((o: string) => '<li>' + e(o) + '</li>').join("") + '</ul><h2>Prérequis</h2><p class="muted">' + e(lesson.prerequisites_fr) + '</p></section>' +
+        '<section id="explication"><div class="eyebrow">LE COURS</div><h2>Explication détaillée</h2><div class="translation-pair"><div class="lesson-copy lang-fr"><div class="theory-body">' + e(lesson.theory_fr).replace(/\n/g, "<br>") + '</div></div>' +
+        (lesson.theory_ar ? '<div class="lang-ar darija" lang="ar" dir="rtl">' + e(lesson.theory_ar).replace(/\n/g, "<br>") + '</div>' : '') + '</div></section>' +
+        '<section id="exemple"><h2>Exemple pratique</h2><div class="theory-body">' + e(lesson.example_fr) + '</div>' +
+        (lesson.code_example ? '<pre class="code-example"><code>' + e(lesson.code_example) + '</code></pre>' : '') + '</section>' +
+        '<section id="videos"><div class="eyebrow">RESSOURCES VIDÉO VALIDÉES</div><h2>Regarder et réviser</h2>' + videoHtml + '</section>' +
+        '<section id="exercises"><div class="eyebrow">ENTRAÎNEMENT GUIDÉ</div><h2>Exercices et corrections</h2><div class="feature-grid">' + exerciseHtml + '</div></section>' +
+        '<section id="quiz"><h2>QCM du chapitre</h2>' + ((qs as Row[]).length ? postForm("/courses/" + slug + "/lesson/" + lessonId, csrf, (qs as Row[]).map((q) => questionBlock(q, csrf)).join("") + btn("Envoyer le QCM")) : '<p>Aucun QCM publié pour ce chapitre.</p>') + '</section>' +
+        '<section id="revision"><h2>Résumé</h2><p>' + e(lesson.summary_fr) + '</p><h3>Révision</h3><p>' + e(lesson.revision_fr) + '</p></section>' +
+        '</article></div></section>';
       return pageResponse(request, user, session, String(lesson.title), body);
     }
 
