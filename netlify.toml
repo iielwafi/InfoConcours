@@ -5,12 +5,9 @@
 [functions]
   node_bundler = "esbuild"
 
+# Only enable the health endpoint during the migration bootstrap.
+# The application-wide rewrite is intentionally added after route parity is complete.
 [[redirects]]
-  from = "/api/*"
-  to = "/.netlify/functions/api/:splat"
-  status = 200
-
-[[redirects]]
-  from = "/*"
-  to = "/.netlify/functions/web/:splat"
+  from = "/api/health"
+  to = "/.netlify/functions/health"
   status = 200
