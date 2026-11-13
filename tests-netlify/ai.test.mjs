@@ -24,7 +24,7 @@ test("Gemini is preferred and receives a JSON-mode grading request", async () =>
   const oldFetch = globalThis.fetch;
   process.env.GEMINI_API_KEY = "test-gemini-key";
   process.env.OPENAI_API_KEY = "test-openai-key";
-  process.env.GEMINI_MODEL = "gemini-3.8-flash";
+  process.env.GEMINI_MODEL = "gemini-3.5-flash-lite";
   delete process.env.AI_TUTOR_MODEL;
 
   let requestedUrl = "";
