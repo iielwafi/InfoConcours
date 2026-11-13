@@ -663,7 +663,7 @@ export default async function handler(request: Request): Promise<Response> {
 
       const body = '<section class="section lesson-reading" id="lessonTop">' +
         '<div class="eyebrow"><a href="/courses">ACADÉMIE</a> · ' + e(lesson.subject_name) + ' · ' + e(lesson.module_title) + '</div>' +
-        '<h1>' + e(lesson.title) + '</h1><p class="muted">Chapitre : ' + e(lesson.chapter_title) + ' · Ressource de préparation.</p>' +
+        '<h1>' + e(lesson.title) + '</h1><p class="muted">Chapitre : ' + e(lesson.chapter_title) + ' · Ressource de préparation.</p><div class="actions"><a class="btn primary" href="/tutor?lesson_id=' + lessonId + '">Demander au professeur IA ✦</a></div>' +
         '<div class="actions lesson-nav">' + (completion.length ? '<span class="tag">Leçon terminée ✓</span>' : postForm("/courses/" + slug + "/lesson/" + lessonId + "/complete", csrf, btn("Marquer comme terminée"))) + '</div>' +
         '<div class="lesson-layout"><aside class="panel lesson-toc"><div class="eyebrow">DANS CETTE LEÇON</div><a href="#objectifs">Objectifs</a><a href="#explication">Explication</a><a href="#exemple">Exemple pratique</a><a href="#videos">Vidéos vérifiées</a><a href="#exercises">Exercices</a><a href="#quiz">QCM du chapitre</a><a href="#revision">Résumé et révision</a><small class="muted">Progression : ' + e(lessonProgress[0]?.evidence_count ?? 0) + ' réponses contributives</small></aside>' +
         '<article class="panel lesson-content">' +
