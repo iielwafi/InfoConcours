@@ -1,40 +1,40 @@
 # Flask → Netlify TypeScript migration
 
-## Safety rules
+## Current state
 
-- Work is isolated on branch `migration/netlify-typescript`; the production `main` branch is not changed.
-- The existing Flask application, Alembic migrations, templates, assets, and tests remain untouched during bootstrap.
-- Neon is retained as the PostgreSQL database. No schema change, data transfer, seed, or production migration is performed by this branch.
-- Never put `DATABASE_URL`, `SECRET_KEY`, OpenAI keys, or access tokens in Git. Add them only in Netlify environment variables with Functions scope.
+- Work is isolated on `migration/netlify-typescript`; production `main` has not been merged or changed.
+- Netlify Deploy Preview is still failing. GitHub exposes the Deploy log link, but not the log text. Do not merge or publish until that error is inspected and the preview passes.
+- `netlify/functions/web.ts` contains one consolidated handler (the duplicated trailing fragments that broke its syntax have been removed).
+- TypeScript helper imports use explicit `.ts` extensions and `tsconfig.json` permits them.
+- `GET /api/health` is handled by the main wildcard function to avoid overlapping function routes.
+- Static CSS, JS and favicon assets are copied to `public/assets`; the legacy `/static/*` URL is rewritten to those assets.
+- Node.js build dependencies are configured. Netlify performs the TypeScript function bundling; the standalone type-check remains available as `npm run typecheck`.
 
-## Bootstrap completed
+## Runtime and data safety
 
-- Added a Node.js/TypeScript package manifest and TypeScript configuration.
-- Added Netlify build/function configuration.
-- Added a read-only `GET /api/health` probe. It executes only `SELECT 1` against Neon and does not expose database errors or credentials.
-- Added Node tests for the health contract, signed-session integrity, CSRF token validation, and Werkzeug password-hash compatibility.
-- Added Node/Netlify build artifacts to `.gitignore`.
-- Added a Neon client helper that reuses a connection client on warm invocations.
-- Added signed, expiring application sessions and CSRF-token helpers.
-- Added password verification for existing Werkzeug `scrypt` and `pbkdf2` hashes; new hashes are emitted in Werkzeug-compatible scrypt format. Cross-checked both directions with Werkzeug locally.
+- Neon PostgreSQL remains the intended database. No schema migration, data transfer, seed, or production database write has been run as part of this runtime migration.
+- Secrets must be configured in Netlify environment variables with Functions scope. Never commit `DATABASE_URL`, `SECRET_KEY`, or `OPENAI_API_KEY`.
+- Existing Flask files, Alembic migrations, templates, and original assets remain in the repository for rollback and comparison.
+- New password hashes use Werkzeug-compatible scrypt; existing Werkzeug scrypt and PBKDF2 formats are supported for verification.
+- Assessment question sets are signed and user-bound; CSRF checks run on POST requests.
 
-## Not yet production-ready
+## Implemented in the TypeScript handler so far
 
-The public application is **not** switched to Netlify yet. The current site depends on Flask routes, Flask-Login, Flask-WTF/CSRF, SQLAlchemy models, Jinja templates, and Python content modules. Those still need a behavior-preserving TypeScript implementation and parity tests. The catch-all rewrite is intentionally disabled so an incomplete migration cannot replace the live site with a broken handler.
+- Public home, registration, login, logout, profile.
+- Dashboard, diagnostic and result, course catalogue, continue course, lesson pages, lesson completion, subject-level assessment.
+- Exercise submissions with QCM/true-false/short-answer auto-grading and optional AI grading fallback.
+- QCM, timed exam, study sessions and daily goal, planner summary, error notebook, bookmarks, language preference.
+- Verified video listing and watched-state tracking.
+- Admin overview, role changes, question creation/activation, curriculum publishing/content creation, manual exercise review, video verification/moderation and quality summary.
 
-## Route parity checklist
+## Still required before production
 
-- [ ] Home and public landing page
-- [ ] Register, login, logout, profile, session and CSRF protection
-- [ ] Dashboard, diagnostic and diagnostic result
-- [ ] Courses, continue course, lessons and lesson completion
-- [ ] Exercise submissions and grading fallback
-- [ ] QCM, exam and result persistence
-- [ ] Planner and study-time tracking
-- [ ] Error notebook, bookmarks and language preference
-- [ ] Videos and watched-state persistence
-- [ ] Admin overview, curriculum, grading queue, quality and videos
+- Inspect and fix the current Netlify Deploy Preview failure.
+- Validate the real Neon schema and read-only health check from a deployed Preview.
+- Run end-to-end checks for registration/login/logout, CSRF, student/admin access, course progress, QCM/exams, grading, bookmarks, videos and admin edits against a staging/test database.
+- Restore all remaining parity details from the original Jinja templates and business logic; the current handler is a first functional port, not a verified one-to-one replacement.
+- Confirm the deployed site and custom domain before merging.
 
 ## Deploy gate
 
-Do not connect this branch to the production Netlify domain until route parity is complete, automated tests pass, and a staging database has been validated. Do not run Alembic against the production Neon database as part of this application-runtime migration.
+Do not merge this branch or change the production Netlify domain until the preview is green and critical flows have passed against a staging database. Do not run Alembic against production Neon as part of this runtime migration.
