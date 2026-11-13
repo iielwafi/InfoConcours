@@ -6,7 +6,7 @@ import {
   currentUser, csrfForPage, csrfValid, escapeHtml, flashBox, getCookie, page, redirect, response, withCookie,
 } from "./_shared/http.ts";
 import { hashPassword, verifyPassword } from "./_shared/password.ts";
-import { askAiTeacher, explainWrongAnswer } from "./_shared/ai.ts";
+import { askAiTeacher, explainWrongAnswer, generateAiJson, hasAiProviderConfigured } from "./_shared/ai.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
@@ -88,10 +88,6 @@ function shortAnswerMatches(submitted: string, accepted: string[]): boolean {
   });
 }
 async function evaluateOpenAnswer(exercise: Row, answer: string): Promise<Row> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("not_configured");
-  const model = (process.env.EXERCISE_GRADING_MODEL || process.env.AI_TUTOR_MODEL || "gpt-6-luna").trim();
-  const controller = AbortSignal.timeout(20_000);
   const prompt = {
     title: exercise.title,
     question: exercise.prompt_fr,
@@ -100,22 +96,11 @@ async function evaluateOpenAnswer(exercise: Row, answer: string): Promise<Row> {
     learning_objective: exercise.learning_objective_fr || "",
     student_answer: answer,
   };
-  const response = await fetch("https://api.openai.com/v1/responses", {
-    method: "POST",
-    signal: controller,
-    headers: { authorization: "Bearer " + apiKey, "content-type": "application/json" },
-    body: JSON.stringify({
-      model,
-      instructions: "Tu es un correcteur pédagogique prudent pour des exercices d’informatique. Évalue le sens, les concepts essentiels, le raisonnement et l’objectif pédagogique. N’invente pas de critères. Si la réponse ne permet pas une évaluation fiable, choisis une confiance basse. Réponds uniquement avec un objet JSON contenant score (0..100), classification (correct|partially_correct|incorrect), explanation_fr, missing_concepts (tableau), expected_answer_fr et confidence (0..1).",
-      input: JSON.stringify(prompt),
-      text: { format: { type: "json_object" } },
-      max_output_tokens: 700,
-    }),
+  const text = await generateAiJson({
+    instructions: "Tu es un correcteur pédagogique prudent pour des exercices d’informatique. Évalue le sens, les concepts essentiels, le raisonnement et l’objectif pédagogique. N’invente pas de critères. Si la réponse ne permet pas une évaluation fiable, choisis une confiance basse. Réponds uniquement avec un objet JSON contenant score (0..100), classification (correct|partially_correct|incorrect), explanation_fr, missing_concepts (tableau), expected_answer_fr et confidence (0..1).",
+    input: JSON.stringify(prompt),
+    maxOutputTokens: 700,
   });
-  if (!response.ok) throw new Error("provider_unavailable");
-  const payload = await response.json() as Row;
-  let text = "";
-  for (const item of payload.output ?? []) for (const part of item.content ?? []) if (part.type === "output_text") text = part.text;
   const result = JSON.parse(text) as Row;
   if (!Number.isFinite(result.score) || result.score < 0 || result.score > 100 || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1 || !["correct","partially_correct","incorrect"].includes(result.classification) || typeof result.explanation_fr !== "string") throw new Error("invalid_grading_result");
   return result;
@@ -280,8 +265,8 @@ export default async function handler(request: Request): Promise<Response> {
         }
       }
 
-      if (!process.env.OPENAI_API_KEY?.trim()) {
-        return Response.json({ ok: false, message: "Le professeur IA n'est pas encore activé. L'administrateur doit ajouter OPENAI_API_KEY dans Netlify." }, { status: 503 });
+      if (!hasAiProviderConfigured()) {
+        return Response.json({ ok: false, message: "Le professeur IA n'est pas encore activé. L'administrateur doit ajouter GEMINI_API_KEY (Gemini gratuit) ou OPENAI_API_KEY dans Netlify." }, { status: 503 });
       }
       try {
         const answer = await askAiTeacher({ messages, curriculumContext: contextParts.join("\n\n---\n\n") });
@@ -602,9 +587,9 @@ export default async function handler(request: Request): Promise<Response> {
               answerField = field("Ta réponse", "answer", "text", "", true);
             } else {
               answerField = '<p class="notice">' +
-                (process.env.OPENAI_API_KEY
-                  ? "Cette réponse sera transmise au service d’évaluation IA. Les réponses incertaines restent à corriger par un enseignant."
-                  : "Aucun correcteur sémantique n’est configuré : cette réponse sera transmise à un enseignant pour correction manuelle.") +
+                (hasAiProviderConfigured()
+                  ? "Cette réponse sera évaluée automatiquement par le professeur IA. Les réponses incertaines pourront être reformulées et réessayées."
+                  : "Aucun correcteur IA n’est configuré pour le moment. La réponse ne sera pas notée tant que le service IA n’est pas activé.") +
                 '</p><label>Ta réponse</label><textarea class="field" name="answer" maxlength="12000" rows="5" required></textarea>';
             }
 
@@ -750,14 +735,14 @@ export default async function handler(request: Request): Promise<Response> {
           status = "ai_retry";
           const reason = error instanceof Error ? error.message : "provider_unavailable";
           feedback = reason === "ai_not_configured" || reason === "not_configured"
-            ? "Le professeur IA n'est pas encore activé. L'administrateur doit ajouter OPENAI_API_KEY dans Netlify. Ta réponse n'a pas été notée."
+            ? "Le professeur IA n'est pas encore activé. L'administrateur doit ajouter GEMINI_API_KEY (Gemini gratuit) ou OPENAI_API_KEY dans Netlify. Ta réponse n'a pas été notée."
             : "Le professeur IA est momentanément indisponible. Ta réponse n'a pas été notée; réessaie plus tard.";
         }
       } else {
         return response("<h1>400 · Type d’exercice invalide</h1>", 400);
       }
 
-      if (!isCorrect && (kind === "qcm" || kind === "true_false" || kind === "short_answer") && process.env.OPENAI_API_KEY?.trim()) {
+      if (!isCorrect && (kind === "qcm" || kind === "true_false" || kind === "short_answer") && hasAiProviderConfigured()) {
         try {
           feedback = await explainWrongAnswer({
             title: String(x.title),
