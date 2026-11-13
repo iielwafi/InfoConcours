@@ -225,7 +225,6 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
 ];
 
 export const MISSING_FRENCH_VIDEO_LESSONS = [
-  "Décomposer un problème et analyser son coût",
   "Comparer sans se fier à un seul chiffre",
   "Comprendre couleur et taille d’image",
 ] as const;
