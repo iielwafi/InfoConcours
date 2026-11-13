@@ -171,6 +171,23 @@ function detailsFor(q: Row, selected: string | null): Row {
   };
 }
 
+function practiceCorrectionHtml(title: string, score: number, total: number, details: Row[], backUrl: string, lessonId = 0): string {
+  const percent = total ? Math.round(score * 100 / total) : 0;
+  const cards = details.map((d) => {
+    const selected = d.selected === null ? "Sans réponse" : String(d.options?.[d.selected] ?? "Réponse non reconnue");
+    const correct = String(d.options?.[d.answer] ?? "Réponse correcte");
+    const content = [
+      d.ok ? "✓ Bonne réponse" : "✗ Réponse incorrecte",
+      "Ta réponse : " + e(selected),
+      "Bonne réponse : " + e(correct),
+      "Explication : " + e(d.explanation),
+      !d.ok ? '<a class="btn ghost ai-explain-link" href="/tutor?question_id=' + Number(d.question_id) + (lessonId ? "&lesson_id=" + lessonId : "") + '">Demander au professeur IA</a>' : "",
+    ].filter(Boolean).join("<br>");
+    return card(String(d.prompt), content, String(d.domain));
+  }).join("");
+  return '<section class="section"><div class="section-head"><div class="eyebrow">CORRECTION · ENTRAÎNEMENT</div><h2>' + e(title) + '</h2><p>' + score + ' / ' + total + ' · ' + percent + ' %</p></div><div class="feature-grid">' + cards + '</div><div class="actions"><a class="btn primary" href="' + e(backUrl) + '">Continuer à apprendre</a><a class="btn ghost" href="/tutor">Parler au professeur IA</a></div></section>';
+}
+
 export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = decodeURIComponent(url.pathname);
@@ -495,11 +512,13 @@ export default async function handler(request: Request): Promise<Response> {
         const details = (qs as Row[]).map((q) => detailsFor(q, form.has("a" + q.id) ? val(form, "a" + q.id) : null));
         if (!details.length) return toNotice("/courses/" + encodeURIComponent(slug), "Aucun exercice actif n’est disponible pour cette matière.", "error");
         const attempt = await recordAttempt(sql, user.id, "qcm", details);
+        let message = "Tentative enregistrée. Il faut au moins 70 % sur 3 questions ou plus pour valider ce palier.";
         if (details.length >= 3 && Number(attempt.score) / Number(attempt.total) >= 0.7) {
           await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${slug},${details.length}) ON CONFLICT (user_id,lesson_key) DO UPDATE SET evidence_count=lesson_progress.evidence_count+${details.length},updated_at=NOW()`;
-          return toNotice("/courses/" + encodeURIComponent(slug), "Palier validé sur l’évaluation de la matière.");
+          message = "Palier validé : tu as obtenu au moins 70 %.";
         }
-        return toNotice("/courses/" + encodeURIComponent(slug), "Tentative enregistrée. Il faut au moins 70 % sur 3 questions ou plus pour valider ce palier.", "error");
+        const body = '<p class="notice">' + e(message) + '</p>' + practiceCorrectionHtml("Résultat de " + String(subjects[0].name), Number(attempt.score), Number(attempt.total), details, "/courses/" + encodeURIComponent(slug));
+        return pageResponse(request, user, session, "Correction · " + String(subjects[0].name), body);
       }
       const lessons = await sql`SELECT l.id,l.title,l.chapter_id,c.title AS chapter_title,m.title AS module_title FROM curriculum_lesson l JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id WHERE m.subject_id=${Number(subjects[0].id)} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE ORDER BY m.position,c.position,l.id`;
       const done = await sql`SELECT lesson_id FROM lesson_completion WHERE user_id=${user.id}`;
@@ -519,10 +538,11 @@ export default async function handler(request: Request): Promise<Response> {
         if (!details.length) return toNotice("/courses/" + slug + "/lesson/" + lessonId, "Aucun QCM publié n’est associé à ce chapitre.", "error");
         const attempt = await recordAttempt(sql, user.id, "qcm", details);
         await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${"lesson:" + lessonId},0) ON CONFLICT (user_id,lesson_key) DO UPDATE SET updated_at=NOW()`;
-        if (details.length >= 3 && Number(attempt.score) / Number(attempt.total) >= 0.7) {
-          await sql`UPDATE lesson_progress SET evidence_count=evidence_count+${details.length},updated_at=NOW() WHERE user_id=${user.id} AND lesson_key=${"lesson:" + lessonId}`;
-        }
-        return redirect("/courses/" + slug + "/lesson/" + lessonId);
+        const passed = details.length >= 3 && Number(attempt.score) / Number(attempt.total) >= 0.7;
+        if (passed) await sql`UPDATE lesson_progress SET evidence_count=evidence_count+${details.length},updated_at=NOW() WHERE user_id=${user.id} AND lesson_key=${"lesson:" + lessonId}`;
+        const message = passed ? "Palier validé : au moins 70 % sur 3 questions ou plus." : "Tentative enregistrée. Pour valider ce palier, il faut au moins 70 % sur 3 questions ou plus.";
+        const body = '<p class="notice">' + e(message) + '</p>' + practiceCorrectionHtml("Correction du chapitre", Number(attempt.score), Number(attempt.total), details, "/courses/" + slug + "/lesson/" + lessonId, lessonId);
+        return pageResponse(request, user, session, "Correction du chapitre", body);
       }
       await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${"lesson:" + lessonId},0) ON CONFLICT (user_id,lesson_key) DO UPDATE SET updated_at=NOW()`;
       const exercises = await sql`SELECT id,title,prompt_fr,prompt_ar,solution_fr,solution_ar,exercise_type,options_json,correct_answer,accepted_answers_json,feedback_fr,grading_guide_fr,learning_objective_fr,level FROM course_exercise WHERE lesson_id=${lessonId} AND published=TRUE ORDER BY id`;
@@ -774,9 +794,7 @@ export default async function handler(request: Request): Promise<Response> {
       const details = qs.map((q) => detailsFor(q, form.has("a" + q.id) ? val(form, "a" + q.id) : null));
       if (!details.length) return toNotice("/qcm", "Aucune question valide n’a été soumise.", "error");
       const attempt = await recordAttempt(sql, user.id, "qcm", details);
-      const body = '<section class="section"><div class="section-head"><div class="eyebrow">RÉSULTAT DU QCM</div><h2>' + e(attempt.score) + ' / ' + e(attempt.total) + '</h2><p>' + Math.round(Number(attempt.score) * 100 / Number(attempt.total)) + ' %</p></div><div class="feature-grid">' +
-        details.map((d) => card(d.prompt, (d.ok ? "✓ Bonne réponse" : "✗ Réponse incorrecte") + "<br>" + e(d.explanation), d.domain)).join("") +
-        '</div><div class="actions"><a class="btn primary" href="/qcm">Nouvel entraînement</a><a class="btn ghost" href="/dashboard">Tableau de bord</a></div></section>';
+      const body = practiceCorrectionHtml("Résultat du QCM", Number(attempt.score), Number(attempt.total), details, "/qcm");
       return pageResponse(request, user, session, "Résultat du QCM", body);
     }
 
