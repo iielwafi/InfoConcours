@@ -373,7 +373,9 @@ export default async function handler(request: Request): Promise<Response> {
         '<div class="ai-tutor-messages" data-tutor-messages aria-live="polite"></div>' +
         '<div class="ai-tutor-prompts"><button type="button" data-tutor-prompt="Explique-moi cette notion simplement avec un exemple.">Explique-moi ce cours</button><button type="button" data-tutor-prompt="Voici ma réponse. Dis-moi si elle est correcte et explique mon erreur si nécessaire.">Corrige ma réponse</button><button type="button" data-tutor-prompt="Donne-moi un exercice similaire pour vérifier que la notion est claire.">Donne-moi un exercice</button></div>' +
         '<form class="ai-tutor-form" data-tutor-form><textarea data-tutor-input name="message" rows="2" maxlength="3000" placeholder="Écris ta question ici…" required></textarea><button class="btn primary" type="submit" data-tutor-send>Envoyer</button></form><div class="ai-tutor-status" data-tutor-status role="status"></div></div>' +
-        '<p class="muted">En entraînement, le professeur peut corriger et expliquer tes erreurs. Pendant un examen, son aide est désactivée jusqu’à la fin.</p></section>';
+        '<p class="muted">En entraînement, le professeur peut corriger et expliquer tes erreurs. Pendant un examen, son aide est désactivée jusqu’à la fin.</p>' +
+        (process.env.GEMINI_API_KEY?.trim() ? '<p class="muted">Confidentialité : le mode gratuit Gemini peut utiliser les contenus envoyés pour améliorer ses services. N’envoie pas de données personnelles ou confidentielles.</p>' : '') +
+        '</section>';
       return pageResponse(request, user, session, "Professeur IA", body);
     }
 
