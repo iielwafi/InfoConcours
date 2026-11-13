@@ -1,3 +1,4 @@
+import type { NeonSqlTag } from "./database.ts";
 import { createHmac, randomBytes } from "node:crypto";
 import type { UserSession } from "./session.ts";
 import { csrfToken, sessionFromRequest, validCsrf } from "./session.ts";
@@ -76,7 +77,7 @@ export function page(user: User | null, title: string, body: string, csrf = ""):
   return '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#111827"><meta name="csrf-token" content="' + escapeHtml(csrf) + '"><title>' + escapeHtml(title) + ' · InfoConcours</title><link rel="icon" type="image/svg+xml" href="/static/favicon.svg"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet"><link rel="stylesheet" href="/static/app.css"><link rel="stylesheet" href="/static/premium.css"></head><body data-user-id="' + (user ? String(user.id) : "") + (title === "Examen blanc" ? ' data-exam-mode="true"' : "") + '"><a class="skip-link" href="#main-content">Passer au contenu</a><header class="top site-header"><a class="logo" href="/" aria-label="InfoConcours, accueil"><span class="logo-mark">IC</span><span class="logo-word">INFO<span>CONCOURS</span></span></a>' + nav + '<div class="utility-actions"><button class="theme" id="themeToggle" type="button">☾</button><button class="lang" id="langToggle" type="button">العربية / Darija</button></div></header><main id="main-content">' + body + '</main><footer class="site-footer"><a class="footer-brand" href="/"><span class="logo-mark">IC</span> INFOCONCOURS</a><span>Une préparation structurée. Un progrès mesurable.</span><small>Plateforme indépendante · Contenus d’entraînement non officiels</small></footer><script src="/static/app.js"></script><script src="/static/premium.js"></script><script src="/static/tutor.js"></script></body></html>';
 }
 
-export async function currentUser(request: Request, sql: ReturnType<typeof import("@neondatabase/serverless").neon>): Promise<{ user: User | null; session: UserSession | null }> {
+export async function currentUser(request: Request, sql: NeonSqlTag): Promise<{ user: User | null; session: UserSession | null }> {
   const session = sessionFor(request);
   if (!session) return { user: null, session: null };
   const rows = await sql`SELECT id, username, email, role FROM "user" WHERE id = ${session.userId} LIMIT 1`;
