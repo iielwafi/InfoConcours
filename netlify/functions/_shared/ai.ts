@@ -45,7 +45,7 @@ async function requestText(
   const controller = AbortSignal.timeout(22_000);
 
   if (geminiKey) {
-    const model = (process.env.GEMINI_MODEL || "gemini-3.8-flash").trim();
+    const model = (process.env.GEMINI_MODEL || "gemini-3.5-flash-lite").trim();
     if (!model || model.length > 100) throw new Error("invalid_ai_model");
     const result = await fetch(
       "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent",
