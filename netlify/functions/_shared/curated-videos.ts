@@ -153,6 +153,13 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
     description: "Introduction aux rôles du DNS et du DHCP dans un réseau et à leur utilisation pour gérer les postes clients."
   },
   {
+    lessonTitle: "Comparer cache, RAM et stockage",
+    title: "La mémoire cache des microprocesseurs",
+    channel: "hicham b",
+    videoId: "3fuXjGR9TTo",
+    description: "Présentation de la mémoire cache du processeur et de son rôle dans la hiérarchie mémoire."
+  },
+  {
     lessonTitle: "Suivre une instruction dans le processeur",
     title: "Étapes d’exécution d’une instruction par le processeur",
     channel: "MEHDI.ma20",
@@ -188,6 +195,13 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
     description: "Créer un tableau croisé dynamique, résumer, filtrer, agréger et extraire des données."
   },
   {
+    lessonTitle: "Choisir un format d’image",
+    title: "Tout savoir sur les formats d’image : JPEG, PNG, GIF et SVG",
+    channel: "OpenClassrooms en Français",
+    videoId: "qNuP1rXHohc",
+    description: "Présentation des principaux formats d’image et de leurs usages : JPEG, PNG, GIF et SVG."
+  },
+  {
     lessonTitle: "Préparer un support pédagogique clair",
     title: "PowerPoint — Tuto simple pour faire une présentation efficace",
     channel: "WizAide",
@@ -211,8 +225,7 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
 ];
 
 export const MISSING_FRENCH_VIDEO_LESSONS = [
-  "Comparer cache, RAM et stockage",
+  "Décomposer un problème et analyser son coût",
   "Comparer sans se fier à un seul chiffre",
-  "Choisir un format d’image",
   "Comprendre couleur et taille d’image",
 ] as const;
