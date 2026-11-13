@@ -365,10 +365,21 @@ export default async function handler(request: Request): Promise<Response> {
 
     const lessonMatch = path.match(/^\/courses\/([^/]+)\/lesson\/(\d+)$/);
     const subjectMatch = path.match(/^\/courses\/([^/]+)$/);
-    if (subjectMatch && method === "GET") {
+    if (subjectMatch && (method === "GET" || method === "POST")) {
       const slug = subjectMatch[1];
       const subjects = await sql`SELECT id,name,slug FROM curriculum_subject WHERE slug=${slug} AND published=TRUE LIMIT 1`;
       if (!subjects.length) return response("<h1>404 · Matière introuvable</h1>", 404);
+      if (method === "POST") {
+        const qs = await sql`SELECT id,domain,topic,level,prompt_fr,prompt_ar,options_fr,options_ar,answer,explanation_fr,explanation_ar FROM question WHERE active=TRUE AND domain=${String(subjects[0].name)} ORDER BY id`;
+        const details = (qs as Row[]).map((q) => detailsFor(q, form.has("a" + q.id) ? val(form, "a" + q.id) : null));
+        if (!details.length) return toNotice("/courses/" + encodeURIComponent(slug), "Aucun exercice actif n’est disponible pour cette matière.", "error");
+        const attempt = await recordAttempt(sql, user.id, "qcm", details);
+        if (details.length >= 3 && Number(attempt.score) / Number(attempt.total) >= 0.7) {
+          await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${slug},${details.length}) ON CONFLICT (user_id,lesson_key) DO UPDATE SET evidence_count=lesson_progress.evidence_count+${details.length},updated_at=NOW()`;
+          return toNotice("/courses/" + encodeURIComponent(slug), "Palier validé sur l’évaluation de la matière.");
+        }
+        return toNotice("/courses/" + encodeURIComponent(slug), "Tentative enregistrée. Il faut au moins 70 % sur 3 questions ou plus pour valider ce palier.", "error");
+      }
       const lessons = await sql`SELECT l.id,l.title,l.chapter_id,c.title AS chapter_title,m.title AS module_title FROM curriculum_lesson l JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id WHERE m.subject_id=${Number(subjects[0].id)} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE ORDER BY m.position,c.position,l.id`;
       const done = await sql`SELECT lesson_id FROM lesson_completion WHERE user_id=${user.id}`;
       const doneIds = new Set(done.map((r: Row) => Number(r.lesson_id)));
