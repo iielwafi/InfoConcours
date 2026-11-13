@@ -8,6 +8,7 @@ import {
 import { hashPassword, verifyPassword } from "./_shared/password.ts";
 import { askAiTeacher, explainWrongAnswer, generateAiJson, hasAiProviderConfigured } from "./_shared/ai.ts";
 import { extractYoutubeVideoId, validHttpsThumbnail } from "./_shared/video.ts";
+import { CURATED_FRENCH_VIDEOS, MISSING_FRENCH_VIDEO_LESSONS } from "./_shared/curated-videos.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
@@ -1041,6 +1042,8 @@ export default async function handler(request: Request): Promise<Response> {
             GROUP BY l.id,l.title,c.title,m.title,s.name,s.slug
             ORDER BY s.name,m.title,c.title,l.id`
         ]);
+        const curatedLessonTitles = new Set(CURATED_FRENCH_VIDEOS.map((video) => video.lessonTitle));
+        const missingFrenchLessons = (lessons as Row[]).filter((lesson) => MISSING_FRENCH_VIDEO_LESSONS.includes(String(lesson.title) as typeof MISSING_FRENCH_VIDEO_LESSONS[number]));
         const lessonOptions = '<option value="">Choisir le cours…</option>' + (lessons as Row[]).map((l) =>
           '<option value="' + Number(l.id) + '">' + e(l.subject_name) + ' · ' + e(l.module_title) + ' · ' + e(l.title) +
           ' — ' + (Number(l.verified_video_count) > 0 ? Number(l.verified_video_count) + ' vidéo(s) publiée(s)' : 'aucune vidéo publiée') + '</option>'
@@ -1080,7 +1083,10 @@ export default async function handler(request: Request): Promise<Response> {
         const body = section("Vidéos des leçons",
           '<div class="video-admin-summary"><strong>' + (lessons as Row[]).length + ' leçons</strong><span>' + missingCount + ' sans vidéo publiée</span><span>' + ((lessons as Row[]).length - missingCount) + ' avec vidéo publiée</span></div>' +
           '<p class="muted">Ajoute une vidéo YouTube précise pour chaque leçon. Elle reste invisible aux apprenants tant qu’elle n’est pas vérifiée et publiée.</p>' +
-          '<div class="panel video-admin-form"><h3>Ajouter une vidéo à une leçon</h3>' +
+          '<div class="panel video-admin-form"><h3>Importer les suggestions françaises</h3><p class="muted">' + CURATED_FRENCH_VIDEOS.length + ' vidéos sélectionnées pour les leçons. L’import les crée en attente de vérification : aucune vidéo ne sera visible aux étudiants avant validation.</p>' +
+          postForm("/admin/videos", token, hidden("action", "import_curated") + btn("Importer les " + CURATED_FRENCH_VIDEOS.length + " vidéos françaises")) +
+          (missingFrenchLessons.length ? '<p class="muted"><b>' + missingFrenchLessons.length + ' leçons restent sans vidéo française validée :</b></p><ul>' + missingFrenchLessons.map((lesson) => '<li>' + e(lesson.title) + ' — <a target="_blank" rel="noopener noreferrer" href="https://www.youtube.com/results?search_query=' + encodeURIComponent(String(lesson.title) + ' cours français informatique') + '">Chercher sur YouTube ↗</a></li>').join("") + '</ul>' : '') +
+          '</div><div class="panel video-admin-form"><h3>Ajouter une vidéo manuellement</h3>' +
           postForm("/admin/videos", token,
             hidden("action", "create") +
             field("Titre de la vidéo", "title", "text", "", true) +
@@ -1100,6 +1106,44 @@ export default async function handler(request: Request): Promise<Response> {
 
       if (path === "/admin/videos" && method === "POST") {
         const action = val(form, "action") || "create";
+        if (action === "import_curated") {
+          let imported = 0, alreadyRegistered = 0, missingLessons = 0, linkedElsewhere = 0;
+          for (const video of CURATED_FRENCH_VIDEOS) {
+            const lessonRows = await sql`SELECT l.id,l.chapter_id,s.slug FROM curriculum_lesson l
+              JOIN curriculum_chapter c ON c.id=l.chapter_id
+              JOIN curriculum_module m ON m.id=c.module_id
+              JOIN curriculum_subject s ON s.id=m.subject_id
+              WHERE l.title=${video.lessonTitle} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE
+              ORDER BY l.id LIMIT 1`;
+            if (!lessonRows.length) { missingLessons++; continue; }
+            const lesson = lessonRows[0] as Row;
+            const existing = await sql`SELECT v.id,vm.lesson_id FROM video_resource v
+              LEFT JOIN video_metadata vm ON vm.video_id=v.id WHERE v.video_id=${video.videoId} LIMIT 1`;
+            if (existing.length) {
+              if (Number(existing[0].lesson_id || 0) === Number(lesson.id)) alreadyRegistered++;
+              else linkedElsewhere++;
+              continue;
+            }
+            const inserted = await sql`INSERT INTO video_resource
+              (title,channel,video_id,language,lesson_key,duration_minutes,verified,verification_status,active,created_by,created_at)
+              VALUES (${video.title},${video.channel},${video.videoId},'Français',${lesson.slug},NULL,FALSE,'pending',TRUE,${user.id},NOW())
+              RETURNING id`;
+            const newVideoId = Number(inserted[0]?.id);
+            if (!newVideoId) throw new Error("curated_video_insert_failed");
+            try {
+              await sql`INSERT INTO video_metadata (video_id,description,chapter_id,lesson_id,thumbnail_url)
+                VALUES (${newVideoId},${video.description},${lesson.chapter_id},${lesson.id},NULL)`;
+            } catch (error) {
+              await sql`DELETE FROM video_resource WHERE id=${newVideoId}`;
+              throw error;
+            }
+            imported++;
+          }
+          const message = imported + " vidéo(s) française(s) ajoutée(s) en attente de vérification; " +
+            alreadyRegistered + " déjà associée(s), " + linkedElsewhere + " déjà utilisées ailleurs, " +
+            missingLessons + " leçon(s) introuvable(s).";
+          return toNotice("/admin/videos", message, imported > 0 || alreadyRegistered > 0 ? "success" : "error");
+        }
         const videoId = Number(form.get("video_id"));
         if (!Number.isInteger(videoId) && action !== "create") return toNotice("/admin/videos", "Vidéo invalide.", "error");
         if (["verify", "reject", "unavailable", "pending"].includes(action)) {
