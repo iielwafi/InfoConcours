@@ -35,12 +35,14 @@
 
 ## YouTube videos for lessons
 
-- Added a curated French-language video pack for **30 of the 32 published lessons**. Every suggestion is matched to the exact lesson title in the curriculum.
-- The admin page `/admin/videos` now has a bulk-import action. It creates the selected records as `pending`; no video is shown to students until an administrator verifies the link and publishes it.
+- Added a curated French-language video pack for **30 of the 32 published lessons**. Every suggestion is matched to the exact lesson title in the curriculum; unavailable YouTube IDs were replaced after checking the watch pages.
+- Student lesson pages render each curated recommendation inside its matching lesson. The global `/videos` page lists the curated resources with a direct link to the associated lesson.
+- These code-backed recommendations are presented as recommendations; they do not set database records to verified or published.
+- The admin page `/admin/videos` still has a bulk-import action. It creates database records as `pending`; an administrator can verify and publish those records separately.
 - The import is idempotent: existing YouTube video IDs are skipped, and a video already linked to another lesson is not reassigned.
 - Two lessons still need a suitable French video: `Comparer sans se fier à un seul chiffre` and `Comprendre couleur et taille d’image`. The admin page provides a direct YouTube search for each missing topic.
-- The curated pack is covered by tests for unique 11-character YouTube IDs and exact lesson-title matching. The current build passes TypeScript and all 14 automated tests.
-- The pack has **not yet been imported into Neon**. An administrator must sign into the preview, open Administration → Vidéos des leçons, and click the French bulk-import button. Imported suggestions remain pending until reviewed.
+- The curated pack is covered by tests for unique 11-character YouTube IDs and exact lesson-title matching.
+- The pack has **not yet been imported into Neon**. The student-facing curated recommendations render from the application code, so no administrator login is needed to see the current 30 suggestions.
 
 ## Runtime and data safety
 
