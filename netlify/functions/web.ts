@@ -1009,26 +1009,13 @@ export default async function handler(request: Request): Promise<Response> {
         return redirect("/admin/curriculum");
       }
 
-      if (path === "/admin/exercise-attempts" && (method === "GET" || method === "POST")) {
-        if (method === "POST") {
-          const id = Number(form.get("attempt_id")), score = Number(form.get("score")), feedback = val(form, "feedback");
-          if (!Number.isInteger(id) || !Number.isFinite(score) || score < 0 || score > 100) return toNotice("/admin/exercise-attempts", "Note invalide.", "error");
-          await sql`UPDATE exercise_attempt SET score=${score},feedback=${feedback},status='manually_graded',evaluated_by=${user.id},evaluated_at=NOW() WHERE id=${id} AND status='pending_manual'`;
-          return redirect("/admin/exercise-attempts");
-        }
-        const attempts = await sql`SELECT ea.id,ea.submitted_answer,ea.created_at,ea.status,x.title,x.prompt_fr,u.username FROM exercise_attempt ea JOIN course_exercise x ON x.id=ea.exercise_id JOIN "user" u ON u.id=ea.user_id WHERE ea.status='pending_manual' ORDER BY ea.created_at ASC LIMIT 100`;
-        const token = csrfForPage(request, session).token;
-        const body = section("Réponses à corriger", '<div class="feature-grid">' + attempts.map((a: Row) => '<article class="feature"><div class="eyebrow">' + e(a.username) + ' · ' + e(formatDate(a.created_at)) + '</div><h3>' + e(a.title) + '</h3><p>' + e(a.prompt_fr) + '</p><blockquote>' + e(a.submitted_answer) + '</blockquote>' + postForm("/admin/exercise-attempts", token, hidden("attempt_id", String(a.id)) + field("Note (%)", "score", "number", "0", true) + field("Feedback", "feedback", "text") + btn("Valider la correction")) + '</article>').join("") + '</div>', attempts.length ? "Réponses ouvertes en attente d’évaluation." : "Aucune réponse en attente.");
-        return pageResponse(request, user, session, "Réponses à corriger", body);
-      }
-
       if (path === "/admin/quality" && method === "GET") {
         const [subjects, videos, pending] = await Promise.all([
           sql`SELECT COUNT(*) AS total FROM curriculum_lesson WHERE published=TRUE`,
           sql`SELECT COUNT(*) AS total FROM video_resource WHERE active=TRUE AND verified=TRUE AND verification_status='verified'`,
-          sql`SELECT COUNT(*) AS total FROM exercise_attempt WHERE status='pending_manual'`,
+          sql`SELECT COUNT(*) AS total FROM exercise_attempt WHERE status='ai_retry'`,
         ]);
-        const body = section("Qualité pédagogique", '<div class="feature-grid">' + card("Leçons publiées", subjects[0].total, "CURRICULUM") + card("Vidéos vérifiées", videos[0].total, "RESSOURCES") + card("Réponses en attente", pending[0].total, "CORRECTION") + '</div>', "Indicateurs calculés à partir de la base actuelle.");
+        const body = section("Qualité pédagogique", '<div class="feature-grid">' + card("Leçons publiées", subjects[0].total, "CURRICULUM") + card("Vidéos vérifiées", videos[0].total, "RESSOURCES") + card("Réponses à reformuler", pending[0].total, "PROFESSEUR IA") + '</div>', "Indicateurs calculés à partir de la base actuelle. Les réponses incertaines sont renvoyées à l’apprenant pour reformulation par le professeur IA.");
         return pageResponse(request, user, session, "Qualité pédagogique", body);
       }
 
