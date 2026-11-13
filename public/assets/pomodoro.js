@@ -112,6 +112,9 @@
   let intervalId = null;
   let lastFocusMinutes = 0;
   let lastFocusDomain = "";
+  let activeFocusMinutes = focusMinutes();
+  let activeFocusDomain = domainSelect.value;
+  let focusSnapshotReady = false;
   let needsSave = false;
   let saving = false;
 
@@ -163,6 +166,12 @@
       setStatus("noDomain");
       return;
     }
+    if (phase === "focus" && !focusSnapshotReady) {
+      activeFocusMinutes = focusMinutes();
+      activeFocusDomain = domainSelect.value;
+      phaseDuration = remainingSeconds;
+      focusSnapshotReady = true;
+    }
     running = true;
     deadline = Date.now() + remainingSeconds * 1000;
     intervalId = window.setInterval(tick, 250);
@@ -195,7 +204,7 @@
         redirect: "follow"
       });
       const finalPath = response.url ? new URL(response.url).pathname : "";
-      if (!response.ok || finalPath === "/login") throw new Error("study_session_save_failed");
+      if (!response.ok || finalPath !== "/dashboard") throw new Error("study_session_save_failed");
       needsSave = false;
       setStatus("saved");
     } catch (_) {
@@ -209,8 +218,9 @@
 
   function finishFocus() {
     stopTicker();
-    lastFocusMinutes = focusMinutes();
-    lastFocusDomain = domainSelect.value;
+    lastFocusMinutes = activeFocusMinutes;
+    lastFocusDomain = activeFocusDomain;
+    focusSnapshotReady = false;
     minutesInput.value = String(lastFocusMinutes);
     needsSave = true;
     completedSessions += 1;
@@ -232,6 +242,7 @@
     phase = "focus";
     remainingSeconds = focusMinutes() * 60;
     phaseDuration = remainingSeconds;
+    focusSnapshotReady = false;
     setStatus("breakComplete");
     render();
   }
@@ -257,6 +268,7 @@
     phase = "focus";
     remainingSeconds = focusMinutes() * 60;
     phaseDuration = remainingSeconds;
+    focusSnapshotReady = false;
     setStatus("ready");
     render();
   });
@@ -274,6 +286,7 @@
       phase = "focus";
       remainingSeconds = nextFocus * 60;
       phaseDuration = remainingSeconds;
+      focusSnapshotReady = false;
       setStatus("ready");
       render();
     });
@@ -284,6 +297,7 @@
     if (!running && phase === "focus") {
       remainingSeconds = focusMinutes() * 60;
       phaseDuration = remainingSeconds;
+      focusSnapshotReady = false;
       setStatus("ready");
       render();
     }
