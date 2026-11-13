@@ -590,20 +590,24 @@ export default async function handler(request: Request): Promise<Response> {
 
             const history = (attemptsByExercise.get(Number(x.id)) ?? []).map((attempt) => {
               const state = attempt.status === "pending_manual"
-                ? "En attente de correction"
-                : attempt.status === "ai_graded"
-                  ? "Évaluée par l’IA · à vérifier si nécessaire"
-                  : attempt.status === "auto_graded"
-                    ? "Correction automatique"
-                    : "Corrigée par un enseignant";
+                ? "Ancienne tentative en attente"
+                : attempt.status === "ai_retry"
+                  ? "Le professeur IA demande une réponse plus précise"
+                  : attempt.status === "ai_graded"
+                    ? "Évaluée par l’IA"
+                    : attempt.status === "auto_graded"
+                      ? "Correction automatique"
+                      : attempt.status === "manually_graded"
+                        ? "Ancienne correction enregistrée"
+                        : "Tentative enregistrée";
               const score = attempt.score === null || attempt.score === undefined
                 ? ""
                 : " · " + Math.round(Number(attempt.score)) + " %";
               let result = "";
-              if (attempt.status === "pending_manual") {
-                result = '<div class="exercise-result exercise-result-pending">' + e(attempt.feedback || "Réponse en attente de correction par l'équipe pédagogique.") + '</div>';
+              if (attempt.status === "pending_manual" || attempt.status === "ai_retry") {
+                result = '<div class="exercise-result exercise-result-pending">' + e(attempt.feedback || "Développe ton raisonnement puis essaie encore.") + '</div>';
               } else if (attempt.status === "manually_graded") {
-                result = '<div class="exercise-result exercise-result-pending"><strong>Correction de l’enseignant · ' + e(Math.round(Number(attempt.score))) + ' %</strong></div>';
+                result = '<div class="exercise-result exercise-result-pending"><strong>Note historique · ' + e(Math.round(Number(attempt.score))) + ' %</strong></div>';
               } else if (attempt.status === "ai_graded" || attempt.status === "auto_graded") {
                 const tone = Number(attempt.score) >= 100
                   ? "exercise-result-correct"
@@ -615,17 +619,20 @@ export default async function handler(request: Request): Promise<Response> {
               const explanation = attempt.feedback && attempt.status !== "pending_manual"
                 ? '<p><b>Explication :</b> ' + e(attempt.feedback) + '</p>'
                 : "";
-              const solution = attempt.status !== "pending_manual" && attempt.status !== "ai_graded" && x.solution_fr
+              const solution = attempt.status !== "pending_manual" && attempt.status !== "ai_retry" && attempt.status !== "ai_graded" && x.solution_fr
                 ? '<details><summary>Voir la correction complète</summary><div class="theory-body">' + e(x.solution_fr) + '</div>' +
                   (x.solution_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.solution_ar) + '</div>' : '') +
                   '</details>'
                 : "";
+              const askAi = attempt.status === "ai_retry" || (attempt.score !== null && Number(attempt.score) < 100)
+                ? '<a class="btn ghost ai-explain-link" href="/tutor?lesson_id=' + lessonId + '&exercise_id=' + Number(x.id) + '">Demander au professeur IA</a>'
+                : "";
               return '<div class="exercise-feedback"><div class="qmeta"><span>' + e(formatDate(attempt.created_at)) + '</span><span>' + state + score + '</span></div>' +
-                '<p><b>Ta réponse :</b> ' + e(attempt.submitted_answer) + '</p>' + result + explanation + solution + '</div>';
+                '<p><b>Ta réponse :</b> ' + e(attempt.submitted_answer) + '</p>' + result + explanation + solution + askAi + '</div>';
             }).join("");
 
             return '<article class="exercise-card" id="exercise-' + e(x.id) + '">' +
-              '<div class="qmeta"><span>' + e(kind === "qcm" ? "QCM" : kind === "true_false" ? "Vrai / faux" : kind === "short_answer" ? "Réponse courte" : "Correction manuelle") + '</span><span>' + e(x.level) + '</span></div>' +
+              '<div class="qmeta"><span>' + e(kind === "qcm" ? "QCM" : kind === "true_false" ? "Vrai / faux" : kind === "short_answer" ? "Réponse courte" : "Réponse ouverte · IA") + '</span><span>' + e(x.level) + '</span></div>' +
               '<h3>' + e(x.title) + '</h3><div class="exercise-prompt">' + e(x.prompt_fr) + '</div>' +
               (x.prompt_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.prompt_ar) + '</div>' : '') +
               (x.learning_objective_fr ? '<p class="muted"><b>Objectif :</b> ' + e(x.learning_objective_fr) + '</p>' : '') +
