@@ -1,6 +1,6 @@
 export type TutorMessage = { role: "user" | "assistant"; content: string };
 
-function outputText(payload: any): string {
+function openAiOutputText(payload: any): string {
   const parts: string[] = [];
   for (const item of payload?.output ?? []) {
     if (item?.type !== "message") continue;
@@ -13,19 +13,77 @@ function outputText(payload: any): string {
   return result;
 }
 
-async function requestText(instructions: string, input: TutorMessage[], maxOutputTokens = 900): Promise<string> {
-  const apiKey = process.env.OPENAI_API_KEY?.trim();
-  if (!apiKey) throw new Error("ai_not_configured");
+function geminiOutputText(payload: any): string {
+  const parts: string[] = [];
+  for (const part of payload?.candidates?.[0]?.content?.parts ?? []) {
+    if (typeof part?.text === "string") parts.push(part.text);
+  }
+  const result = parts.join("\n").trim();
+  if (!result) throw new Error("empty_ai_response");
+  return result;
+}
 
-  const model = (process.env.AI_TUTOR_MODEL || "gpt-6-luna").trim();
-  if (!model || model.length > 100) throw new Error("invalid_ai_model");
+/** True when one supported server-side AI provider key is configured. */
+export function hasAiProviderConfigured(): boolean {
+  return Boolean(process.env.GEMINI_API_KEY?.trim() || process.env.OPENAI_API_KEY?.trim());
+}
+
+/**
+ * Gemini Free Tier is preferred when configured, so the app never spends OpenAI
+ * credits when both providers are present. OpenAI remains an optional fallback.
+ */
+async function requestText(
+  instructions: string,
+  input: TutorMessage[],
+  maxOutputTokens = 900,
+  jsonMode = false,
+): Promise<string> {
+  const geminiKey = process.env.GEMINI_API_KEY?.trim();
+  const openAiKey = process.env.OPENAI_API_KEY?.trim();
+  if (!geminiKey && !openAiKey) throw new Error("ai_not_configured");
 
   const controller = AbortSignal.timeout(22_000);
+
+  if (geminiKey) {
+    const model = (process.env.GEMINI_MODEL || process.env.AI_TUTOR_MODEL || "gemini-3.8-flash").trim();
+    if (!model || model.length > 100) throw new Error("invalid_ai_model");
+    const result = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(model) + ":generateContent",
+      {
+        method: "POST",
+        signal: controller,
+        headers: {
+          "x-goog-api-key": geminiKey,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: instructions }] },
+          contents: input.map((message) => ({
+            role: message.role === "assistant" ? "model" : "user",
+            parts: [{ text: message.content }],
+          })),
+          generationConfig: {
+            maxOutputTokens,
+            ...(jsonMode ? { responseMimeType: "application/json" } : {}),
+          },
+        }),
+      },
+    );
+    if (!result.ok) {
+      if (result.status === 429) throw new Error("ai_rate_limited");
+      if (result.status === 401 || result.status === 403) throw new Error("ai_provider_auth");
+      throw new Error("ai_provider_unavailable");
+    }
+    return geminiOutputText(await result.json());
+  }
+
+  const model = (process.env.OPENAI_MODEL || process.env.AI_TUTOR_MODEL || "gpt-4o-mini").trim();
+  if (!model || model.length > 100) throw new Error("invalid_ai_model");
   const result = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     signal: controller,
     headers: {
-      authorization: "Bearer " + apiKey,
+      authorization: "Bearer " + openAiKey,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -33,16 +91,29 @@ async function requestText(instructions: string, input: TutorMessage[], maxOutpu
       instructions,
       input: input.map((message) => ({ role: message.role, content: message.content })),
       max_output_tokens: maxOutputTokens,
+      ...(jsonMode ? { text: { format: { type: "json_object" } } } : {}),
     }),
   });
-
   if (!result.ok) {
-    const status = result.status;
-    if (status === 429) throw new Error("ai_rate_limited");
-    if (status === 401 || status === 403) throw new Error("ai_provider_auth");
+    if (result.status === 429) throw new Error("ai_rate_limited");
+    if (result.status === 401 || result.status === 403) throw new Error("ai_provider_auth");
     throw new Error("ai_provider_unavailable");
   }
-  return outputText(await result.json());
+  return openAiOutputText(await result.json());
+}
+
+/** Generate structured JSON through the configured provider (Gemini preferred). */
+export async function generateAiJson(args: {
+  instructions: string;
+  input: string;
+  maxOutputTokens?: number;
+}): Promise<string> {
+  return requestText(
+    args.instructions,
+    [{ role: "user", content: args.input }],
+    args.maxOutputTokens ?? 700,
+    true,
+  );
 }
 
 const TEACHER_INSTRUCTIONS = `Tu es le Professeur IA officiel de la plateforme INFOCONCOURS, spécialisé dans la préparation aux concours d'informatique.
