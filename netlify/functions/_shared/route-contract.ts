@@ -1,7 +1,7 @@
 export type HttpMethod = "GET" | "POST";
 export type AccessLevel = "public" | "authenticated" | "admin";
 
-/** Canonical route inventory extracted from the existing Flask application. */
+/** Canonical Netlify route inventory, including the AI tutor routes added during migration. */
 export const ROUTE_CONTRACT = [
   { name: "home", methods: ["GET"], paths: ["/"], access: "public" },
   { name: "register", methods: ["GET", "POST"], paths: ["/register"], access: "public" },
@@ -26,10 +26,11 @@ export const ROUTE_CONTRACT = [
   { name: "videos", methods: ["GET"], paths: ["/videos"], access: "authenticated" },
   { name: "mark_video_watched", methods: ["POST"], paths: ["/videos/:video_id/watched"], access: "authenticated" },
   { name: "admin_curriculum", methods: ["GET", "POST"], paths: ["/admin/curriculum"], access: "admin" },
-  { name: "admin_exercise_attempts", methods: ["GET", "POST"], paths: ["/admin/exercise-attempts"], access: "admin" },
   { name: "admin_quality", methods: ["GET"], paths: ["/admin/quality"], access: "admin" },
   { name: "admin_videos", methods: ["GET", "POST"], paths: ["/admin/videos"], access: "admin" },
   { name: "exam", methods: ["GET", "POST"], paths: ["/exam"], access: "authenticated" },
+  { name: "ai_tutor", methods: ["GET"], paths: ["/tutor"], access: "authenticated" },
+  { name: "ai_tutor_api", methods: ["POST"], paths: ["/api/tutor"], access: "authenticated" },
   { name: "admin", methods: ["GET", "POST"], paths: ["/admin"], access: "admin" },
 ] as const satisfies ReadonlyArray<{
   name: string;
