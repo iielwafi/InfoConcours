@@ -9,6 +9,7 @@ import { hashPassword, verifyPassword } from "./_shared/password.ts";
 import { askAiTeacher, explainWrongAnswer, generateAiJson, hasAiProviderConfigured } from "./_shared/ai.ts";
 import { extractYoutubeVideoId, validHttpsThumbnail } from "./_shared/video.ts";
 import { CURATED_FRENCH_VIDEOS, MISSING_FRENCH_VIDEO_LESSONS } from "./_shared/curated-videos.ts";
+import { summarizeAttemptDetails } from "./_shared/planner.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
@@ -866,8 +867,98 @@ export default async function handler(request: Request): Promise<Response> {
     }
 
     if (path === "/planner" && method === "GET") {
-      const rows = await sql`SELECT domain,ROUND(AVG(score*100.0/NULLIF(total,0))) AS average,COUNT(*) AS attempts FROM attempt WHERE user_id=${user.id} AND mode='qcm' GROUP BY domain ORDER BY average ASC NULLS FIRST`;
-      const body = section("Ton plan de révision", '<div class="feature-grid">' + rows.map((r: Row) => card(String(r.domain), r.average == null ? "Aucun résultat pour le moment" : r.average + " % · " + r.attempts + " séries", "PRIORITÉ DE RÉVISION")).join("") + '</div><div class="actions"><a class="btn primary" href="/qcm">Lancer un QCM</a><a class="btn ghost" href="/courses">Revoir les cours</a></div>', "Les matières sans résultats apparaissent en premier.");
+      const [attemptRows, subjects, goalRows, todayRows] = await Promise.all([
+        sql`SELECT id,details FROM attempt WHERE user_id=${user.id} AND mode='qcm' ORDER BY created_at DESC LIMIT 200`,
+        sql`SELECT name,slug,position FROM curriculum_subject WHERE published=TRUE ORDER BY position,name`,
+        sql`SELECT daily_minutes FROM study_goal WHERE user_id=${user.id} LIMIT 1`,
+        sql`SELECT COALESCE(SUM(minutes),0) AS minutes FROM study_session WHERE user_id=${user.id} AND studied_on=CURRENT_DATE`,
+      ]);
+      const reviewStats = summarizeAttemptDetails(attemptRows as Row[]);
+      const statsByDomain = new Map(reviewStats.map((item) => [item.domain, item]));
+      const plans: Row[] = (subjects as Row[]).map((subject) => ({
+        ...subject,
+        stats: statsByDomain.get(String(subject.name)) ?? null,
+      }));
+      const reviewed: Row[] = plans
+        .filter((subject): boolean => Boolean(subject.stats))
+        .sort((a, b) => Number(a.stats!.average) - Number(b.stats!.average));
+      const notYetReviewed: Row[] = plans.filter((subject): boolean => !subject.stats);
+      const dailyGoal = Math.max(15, Math.min(720, Number(goalRows[0]?.daily_minutes ?? 60)));
+      const todayMinutes = Math.max(0, Number(todayRows[0]?.minutes ?? 0));
+      const todayPercent = Math.min(100, Math.round(todayMinutes * 100 / dailyGoal));
+      const csrf = csrfForPage(request, session).token;
+
+      const reviewedHtml = reviewed.map((subject, index) => {
+        const stats = subject.stats!;
+        const average = Math.max(0, Math.min(100, Number(stats.average)));
+        const priority = average < 50 ? "Priorité haute" : average < 70 ? "À renforcer" : "À maintenir";
+        const tone = average < 50 ? "priority-high" : average < 70 ? "priority-medium" : "priority-low";
+        const estimated = average < 50 ? 40 : average < 70 ? 30 : 20;
+        const qcmUrl = "/qcm?domain=" + encodeURIComponent(String(subject.name));
+        return '<article class="feature planner-review-card">' +
+          '<div class="planner-card-top"><span class="tag ' + tone + '">' + priority + '</span><span class="planner-score">' + average + ' %</span></div>' +
+          '<h3>' + e(subject.name) + '</h3>' +
+          '<div class="planner-score-track" role="img" aria-label="' + average + ' pour cent de bonnes réponses"><span style="width:' + average + '%"></span></div>' +
+          '<p>' + e(stats.responses) + ' réponses · ' + e(stats.attempts) + ' séries QCM</p>' +
+          '<div class="planner-card-bottom"><span>Durée conseillée</span><strong>' + estimated + ' min</strong></div>' +
+          '<div class="actions"><a class="btn primary" href="' + e(qcmUrl) + '">Pratiquer</a><a class="btn ghost-light" href="/courses">Revoir le cours</a></div>' +
+          '</article>';
+      }).join("");
+
+      const unreviewedHtml = notYetReviewed.map((subject) =>
+        '<article class="feature planner-review-card planner-unreviewed">' +
+        '<div class="planner-card-top"><span class="tag">À évaluer</span><span class="planner-score planner-score-muted">—</span></div>' +
+        '<h3>' + e(subject.name) + '</h3>' +
+        '<p>Aucune réponse QCM enregistrée. Cette matière n’est pas considérée comme faible.</p>' +
+        '<div class="planner-card-bottom"><span>Première étape</span><strong>Diagnostic</strong></div>' +
+        '<div class="actions"><a class="btn primary" href="/diagnostic">Faire le diagnostic</a><a class="btn ghost-light" href="/qcm?domain=' + e(encodeURIComponent(String(subject.name))) + '">Faire un QCM</a></div>' +
+        '</article>'
+      ).join("");
+
+      const domainOptions = (subjects as Row[]).map((subject) =>
+        '<option value="' + e(subject.name) + '">' + e(subject.name) + '</option>'
+      ).join("");
+
+      const pomodoroHtml = '<section class="section planner-pomodoro-section" id="pomodoroApp">' +
+        '<div class="section-head"><div class="eyebrow">CONCENTRATION & RÉGULARITÉ</div><h2>Pomodoro — avance par cycles</h2>' +
+        '<p>25 minutes de concentration, 5 minutes de pause. Après 4 cycles, profite d’une pause longue de 15 minutes. Chaque focus terminé est enregistré dans ton suivi.</p></div>' +
+        '<div class="pomodoro-grid">' +
+          '<article class="panel pomodoro-console">' +
+            '<div class="pomodoro-console-top"><span class="tag" id="pomodoroPhaseChip">CONCENTRATION</span><span class="pomodoro-count"><strong id="pomodoroSessions">0</strong> séances terminées aujourd’hui</span></div>' +
+            '<div class="pomodoro-ring" id="pomodoroRing" role="progressbar" aria-label="Progression du minuteur" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">' +
+              '<div class="pomodoro-clock-face"><span id="pomodoroPhase">CONCENTRATION</span><strong id="pomodoroClock">25:00</strong><small id="pomodoroStatus" role="status" aria-live="polite">Prêt à te concentrer ?</small></div>' +
+            '</div>' +
+            '<div class="pomodoro-presets"><button type="button" class="btn ghost-light" data-pomodoro-preset="25,5">Pomodoro 25/5</button><button type="button" class="btn ghost-light" data-pomodoro-preset="50,10">Focus 50/10</button></div>' +
+            '<div class="pomodoro-controls"><button type="button" class="btn primary" id="pomodoroStart">Démarrer le focus</button><button type="button" class="btn ghost-light" id="pomodoroReset">Réinitialiser</button></div>' +
+            '<button type="button" class="btn ghost-light pomodoro-retry" id="pomodoroRetrySave" hidden>Réessayer l’enregistrement</button>' +
+            '<p class="pomodoro-footnote">Les pauses ne sont jamais ajoutées au temps d’étude. Une pause longue de 15 minutes démarre après le quatrième focus terminé.</p>' +
+          '</article>' +
+          '<article class="panel pomodoro-settings">' +
+            '<div class="eyebrow">TA SESSION DE TRAVAIL</div><h3>Prépare ton focus</h3>' +
+            '<form id="pomodoroSaveForm" action="/study" method="post">' +
+              csrfField(csrf) +
+              '<label for="pomodoroDomain">Matière à travailler</label><select class="field" id="pomodoroDomain" name="domain" required>' + domainOptions + '</select>' +
+              '<label for="pomodoroTask">Objectif de cette séance</label><input class="field" id="pomodoroTask" type="text" maxlength="120" placeholder="Ex. : réviser les masques réseau">' +
+              '<div class="pomodoro-duration-grid">' +
+                '<label for="pomodoroFocusMinutes">Durée du focus (min)<input class="field" id="pomodoroFocusMinutes" type="number" min="1" max="180" value="25"></label>' +
+                '<label for="pomodoroBreakMinutes">Pause courte (min)<input class="field" id="pomodoroBreakMinutes" type="number" min="1" max="60" value="5"></label>' +
+              '</div>' +
+              '<input type="hidden" name="minutes" id="pomodoroSavedMinutes" value="25">' +
+            '</form>' +
+            '<div class="pomodoro-rules"><div><span>01</span><p><b>Concentre-toi</b><small>Une tâche, sans distraction.</small></p></div><div><span>02</span><p><b>Fais une pause</b><small>Lève-toi, bois de l’eau, respire.</small></p></div><div><span>03</span><p><b>Répète 4 cycles</b><small>Une pause longue de 15 minutes t’attend.</small></p></div></div>' +
+            '<p class="muted"><a href="/study">Voir tout l’historique et régler ton objectif quotidien ↗</a></p>' +
+          '</article>' +
+        '</div></section>';
+
+      const body = '<section class="section planner-heading"><div class="eyebrow">ORGANISATION PERSONNELLE</div><h1>Ton plan de révision</h1>' +
+        '<p class="muted">Tes priorités sont classées selon tes réponses aux QCM enregistrés. Une matière sans résultat reste à évaluer : elle n’est jamais déclarée faible sans données.</p>' +
+        '<div class="planner-daily-progress"><div><span>Temps étudié aujourd’hui</span><strong>' + todayMinutes + ' / ' + dailyGoal + ' min</strong></div><div class="planner-progress-track"><span style="width:' + todayPercent + '%"></span></div><small>' + todayPercent + ' % de ton objectif quotidien · <a href="/study">Modifier l’objectif</a></small></div>' +
+        '</section>' +
+        '<section class="section"><div class="section-head"><div class="eyebrow">TES PRIORITÉS</div><h2>Matières à renforcer</h2><p>Les matières avec les résultats les plus faibles apparaissent en premier.</p></div>' +
+        (reviewedHtml ? '<div class="feature-grid planner-review-grid">' + reviewedHtml + '</div>' : '<div class="panel empty-note"><h3>Pas encore de résultat QCM</h3><p>Commence par le diagnostic ou réalise un premier QCM. Tes priorités seront calculées automatiquement à partir de tes réponses.</p><div class="actions"><a class="btn primary" href="/diagnostic">Faire le diagnostic</a><a class="btn ghost-light" href="/qcm">Lancer un QCM</a></div></div>') +
+        (unreviewedHtml ? '<div class="planner-unreviewed-section"><div class="section-head"><div class="eyebrow">À DÉCOUVRIR</div><h2>Matières à évaluer</h2><p>Aucune faiblesse n’est supposée tant qu’il n’y a pas de réponses enregistrées.</p></div><div class="feature-grid planner-review-grid">' + unreviewedHtml + '</div></div>' : '') +
+        '</section>' + pomodoroHtml;
+
       return pageResponse(request, user, session, "Plan de révision", body);
     }
 
