@@ -19,6 +19,7 @@ test("rejects non-YouTube hosts, malformed IDs, and invalid URLs", () => {
   assert.equal(extractYoutubeVideoId("https://example.com/watch?v=dQw4w9WgXcQ"), null);
   assert.equal(extractYoutubeVideoId("https://youtube.com/watch?v=short"), null);
   assert.equal(extractYoutubeVideoId("not a URL"), null);
+  assert.equal(extractYoutubeVideoId("http://youtu.be/dQw4w9WgXcQ"), null);
 });
 
 test("thumbnail URL validation only accepts optional credential-free HTTPS URLs", () => {
