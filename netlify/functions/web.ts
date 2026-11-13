@@ -178,12 +178,19 @@ export default async function handler(request: Request): Promise<Response> {
   // Explicit lightweight probe before authentication or app DB queries.
   if (path === "/api/health" && method === "GET") {
     const databaseUrl = process.env.DATABASE_URL;
-    if (!databaseUrl) return Response.json({ ok: false, service: "infoconcours", status: "missing_database_configuration" }, { status: 503 });
+    const secretKey = process.env.SECRET_KEY;
+    const missing: string[] = [];
+    if (!databaseUrl) missing.push("DATABASE_URL");
+    if (!secretKey || secretKey.length < 32) missing.push("SECRET_KEY (minimum 32 characters)");
+    if (missing.length) {
+      return Response.json({ ok: false, service: "infoconcours", status: "missing_environment_variables", missing }, { status: 503 });
+    }
     try {
       const probe = database();
       await probe`SELECT 1 AS ok`;
-      return Response.json({ ok: true, service: "infoconcours", database: "connected" });
-    } catch {
+      return Response.json({ ok: true, service: "infoconcours", database: "connected", secretConfigured: true });
+    } catch (error) {
+      console.error("InfoConcours health probe failed:", error instanceof Error ? error.message : "unknown");
       return Response.json({ ok: false, service: "infoconcours", status: "database_unavailable" }, { status: 503 });
     }
   }
@@ -912,7 +919,7 @@ export default async function handler(request: Request): Promise<Response> {
     return response("<h1>404 · Page introuvable</h1><p><a href='/dashboard'>Retour au tableau de bord</a></p>", 404);
   } catch (error) {
     // Log only a compact message; never expose DB credentials or SQL details to visitors.
-    console.error("InfoConcours function error:", error instanceof Error ? error.message : "unknown");
+    console.error("InfoConcours function error:", error);
     return response("<h1>Service temporairement indisponible</h1><p>Réessaie dans quelques instants.</p>", 503);
   }
 }
