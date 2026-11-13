@@ -7,6 +7,7 @@ import {
 } from "./_shared/http.ts";
 import { hashPassword, verifyPassword } from "./_shared/password.ts";
 import { askAiTeacher, explainWrongAnswer, generateAiJson, hasAiProviderConfigured } from "./_shared/ai.ts";
+import { extractYoutubeVideoId, validHttpsThumbnail } from "./_shared/video.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
@@ -1017,20 +1018,90 @@ export default async function handler(request: Request): Promise<Response> {
       }
 
       if (path === "/admin/videos" && method === "GET") {
-        const rows = await sql`SELECT id,title,channel,video_id,language,lesson_key,verified,verification_status,active FROM video_resource ORDER BY created_at DESC LIMIT 100`;
+        const [rows, lessons] = await Promise.all([
+          sql`SELECT v.id,v.title,v.channel,v.video_id,v.language,v.lesson_key,v.duration_minutes,v.verified,v.verification_status,v.active,
+              vm.lesson_id,vm.description,vm.thumbnail_url,l.title AS lesson_title,s.name AS subject_name,
+              c.title AS chapter_title,m.title AS module_title
+            FROM video_resource v
+            LEFT JOIN video_metadata vm ON vm.video_id=v.id
+            LEFT JOIN curriculum_lesson l ON l.id=vm.lesson_id
+            LEFT JOIN curriculum_chapter c ON c.id=l.chapter_id
+            LEFT JOIN curriculum_module m ON m.id=c.module_id
+            LEFT JOIN curriculum_subject s ON s.id=m.subject_id
+            ORDER BY v.created_at DESC NULLS LAST,v.id DESC LIMIT 150`,
+          sql`SELECT l.id,l.title,c.title AS chapter_title,m.title AS module_title,s.name AS subject_name,s.slug,
+              COUNT(v.id) FILTER (WHERE v.active=TRUE AND v.verified=TRUE AND v.verification_status='verified') AS verified_video_count
+            FROM curriculum_lesson l
+            JOIN curriculum_chapter c ON c.id=l.chapter_id
+            JOIN curriculum_module m ON m.id=c.module_id
+            JOIN curriculum_subject s ON s.id=m.subject_id
+            LEFT JOIN video_metadata vm ON vm.lesson_id=l.id
+            LEFT JOIN video_resource v ON v.id=vm.video_id
+            WHERE l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE
+            GROUP BY l.id,l.title,c.title,m.title,s.name,s.slug
+            ORDER BY s.position,m.position,c.position,l.id`
+        ]);
+        const lessonOptions = '<option value="">Choisir le cours…</option>' + (lessons as Row[]).map((l) =>
+          '<option value="' + Number(l.id) + '">' + e(l.subject_name) + ' · ' + e(l.module_title) + ' · ' + e(l.title) +
+          ' — ' + (Number(l.verified_video_count) > 0 ? Number(l.verified_video_count) + ' vidéo(s) publiée(s)' : 'aucune vidéo publiée') + '</option>'
+        ).join("");
         const token = csrfForPage(request, session).token;
-        const body = section("Gestion des vidéos", '<div class="feature-grid">' + rows.map((v: Row) => '<article class="feature"><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + ' · ' + e(v.lesson_key) + '</p><p>' + e(v.verification_status) + ' · ' + (v.active ? "Active" : "Inactive") + '</p>' +
-          postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", v.verification_status === "verified" ? "pending" : "verify") + btn(v.verification_status === "verified" ? "Retirer la vérification" : "Vérifier")) +
-          postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", v.active ? "toggle" : "toggle") + btn(v.active ? "Désactiver" : "Activer")) +
-          postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", "reject") + btn("Rejeter")) +
-          '</article>').join("") + '</div><h3>Ajouter une ressource</h3>' +
-          postForm("/admin/videos", token, field("Titre", "title", "text", "", true) + field("Chaîne", "channel", "text", "", true) + field("URL YouTube", "url", "url", "", true) + field("Matière / clé de leçon", "lesson_key", "text", "", true) + field("Langue", "language", "text", "Français", true) + btn("Ajouter en attente")) + '</section>');
-        return pageResponse(request, user, session, "Gestion des vidéos", body);
+        const cards = (rows as Row[]).map((v) => {
+          const status = String(v.verification_status || "pending");
+          const lessonLabel = v.lesson_title
+            ? String(v.subject_name) + " · " + String(v.chapter_title) + " · " + String(v.lesson_title)
+            : "Aucun cours associé";
+          const currentLessonOptions = '<option value="">Choisir le cours…</option>' + (lessons as Row[]).map((l) =>
+            '<option value="' + Number(l.id) + '"' + (Number(v.lesson_id) === Number(l.id) ? ' selected' : '') + '>' +
+            e(l.subject_name) + ' · ' + e(l.chapter_title) + ' · ' + e(l.title) + '</option>'
+          ).join("");
+          const actions =
+            postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", status === "verified" ? "pending" : "verify") + btn(status === "verified" ? "Retirer la publication" : "Vérifier et publier")) +
+            postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", "toggle") + btn(v.active ? "Désactiver" : "Activer")) +
+            postForm("/admin/videos", token, hidden("video_id", String(v.id)) + hidden("action", "reject") + btn("Rejeter")) +
+            '<details class="video-admin-edit"><summary>Modifier le lien ou le cours</summary>' +
+            postForm("/admin/videos", token,
+              hidden("video_id", String(v.id)) + hidden("action", "edit") +
+              field("Titre", "title", "text", String(v.title), true) +
+              field("Chaîne YouTube", "channel", "text", String(v.channel), true) +
+              field("URL YouTube", "url", "url", "https://www.youtube.com/watch?v=" + String(v.video_id), true) +
+              '<label>Associer à un cours</label><select class="field" name="lesson_id" required>' + currentLessonOptions + '</select>' +
+              '<label>Langue</label><select class="field" name="language"><option' + (v.language === "Français" ? ' selected' : '') + '>Français</option><option' + (v.language === "العربية / Darija" ? ' selected' : '') + '>العربية / Darija</option><option' + (v.language === "Arabe" ? ' selected' : '') + '>Arabe</option></select>' +
+              '<label>Description</label><textarea class="field" name="description" maxlength="4000">' + e(v.description || "") + '</textarea>' +
+              field("Durée (minutes)", "duration_minutes", "number", v.duration_minutes ? String(v.duration_minutes) : "") +
+              field("Miniature HTTPS (facultative)", "thumbnail_url", "url", String(v.thumbnail_url || "")) +
+              btn("Enregistrer les modifications")) + '</details>';
+          return '<article class="feature video-admin-card"><div class="eyebrow">' + e(status === "verified" ? "PUBLIÉE" : status === "rejected" ? "REFUSÉE" : "À VÉRIFIER") +
+            ' · ' + (v.active ? "Active" : "Désactivée") + '</div><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + '</p><p class="muted">' + e(lessonLabel) + '</p>' +
+            '<p class="muted"><a href="https://www.youtube.com/watch?v=' + e(v.video_id) + '" target="_blank" rel="noopener noreferrer">Ouvrir la vidéo sur YouTube ↗</a></p>' +
+            '<div class="video-admin-actions">' + actions + '</div></article>';
+        }).join("");
+        const missingCount = (lessons as Row[]).filter((l) => Number(l.verified_video_count) === 0).length;
+        const body = section("Vidéos des leçons",
+          '<div class="video-admin-summary"><strong>' + (lessons as Row[]).length + ' leçons</strong><span>' + missingCount + ' sans vidéo publiée</span><span>' + (lessons as Row[]).length - missingCount + ' avec vidéo publiée</span></div>' +
+          '<p class="muted">Ajoute une vidéo YouTube précise pour chaque leçon. Elle reste invisible aux apprenants tant qu’elle n’est pas vérifiée et publiée.</p>' +
+          '<div class="panel video-admin-form"><h3>Ajouter une vidéo à une leçon</h3>' +
+          postForm("/admin/videos", token,
+            hidden("action", "create") +
+            field("Titre de la vidéo", "title", "text", "", true) +
+            field("Chaîne YouTube", "channel", "text", "", true) +
+            field("Lien YouTube", "url", "url", "", true) +
+            '<label>Leçon concernée</label><select class="field" name="lesson_id" required>' + lessonOptions + '</select>' +
+            '<label>Langue</label><select class="field" name="language"><option>Français</option><option>العربية / Darija</option><option>Arabe</option></select>' +
+            '<label>Description (facultative)</label><textarea class="field" name="description" maxlength="4000" rows="3"></textarea>' +
+            field("Durée en minutes (facultative)", "duration_minutes", "number") +
+            field("URL HTTPS de miniature (facultative)", "thumbnail_url", "url") +
+            btn("Enregistrer en attente de vérification")) +
+          '</div><h3>Vidéos enregistrées · ' + (rows as Row[]).length + '</h3>' +
+          ((rows as Row[]).length ? '<div class="feature-grid video-admin-grid">' + cards + '</div>' : '<div class="empty-note">Aucune vidéo enregistrée. Commence par associer une vidéo à une leçon.</div>'),
+          "Les vidéos approuvées sont lues directement dans la page du cours.");
+        return pageResponse(request, user, session, "Vidéos des leçons", body);
       }
 
       if (path === "/admin/videos" && method === "POST") {
         const action = val(form, "action") || "create";
         const videoId = Number(form.get("video_id"));
+        if (!Number.isInteger(videoId) && action !== "create") return toNotice("/admin/videos", "Vidéo invalide.", "error");
         if (["verify", "reject", "unavailable", "pending"].includes(action)) {
           const status = action === "verify" ? "verified" : action === "reject" ? "rejected" : action === "unavailable" ? "unavailable" : "pending";
           await sql`UPDATE video_resource SET verification_status=${status},verified=${action === "verify"},verified_at=CASE WHEN ${action === "verify"} THEN NOW() ELSE NULL END WHERE id=${videoId}`;
@@ -1047,13 +1118,51 @@ export default async function handler(request: Request): Promise<Response> {
           await sql`DELETE FROM video_resource WHERE id=${videoId}`;
           return redirect("/admin/videos");
         }
-        if (action !== "create") return response("<h1>400 · Action invalide</h1>", 400);
-        const title = val(form, "title"), channel = val(form, "channel"), raw = val(form, "url"), lessonKey = val(form, "lesson_key"), language = val(form, "language") || "Français";
-        const match = raw.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/);
-        if (!title || !channel || !match || !lessonKey) return toNotice("/admin/videos", "Vérifie le titre, la chaîne, l’URL YouTube et la clé de leçon.", "error");
-        await sql`INSERT INTO video_resource (title,channel,video_id,language,lesson_key,verified,verification_status,active,created_by) VALUES (${title.slice(0,200)},${channel.slice(0,160)},${match[1]},${language.slice(0,20)},${lessonKey.slice(0,100)},FALSE,'pending',TRUE,${user.id}) ON CONFLICT (video_id) DO NOTHING`;
-        return toNotice("/admin/videos", "Ressource ajoutée en attente de vérification.");
+
+        const title = val(form, "title");
+        const channel = val(form, "channel");
+        const raw = val(form, "url");
+        const youtubeId = extractYoutubeVideoId(raw);
+        const lessonId = Number(form.get("lesson_id"));
+        const language = val(form, "language") || "Français";
+        const description = val(form, "description").slice(0, 4000);
+        const thumbnail = val(form, "thumbnail_url");
+        const durationRaw = val(form, "duration_minutes");
+        const duration = durationRaw ? Number(durationRaw) : null;
+        const validLanguage = ["Français", "العربية / Darija", "Arabe"].includes(language);
+        if (!title || title.length > 200 || !channel || channel.length > 160 || !youtubeId ||
+            !Number.isInteger(lessonId) || lessonId <= 0 || !validLanguage ||
+            (duration !== null && (!Number.isInteger(duration) || duration < 1 || duration > 600)) ||
+            !validHttpsThumbnail(thumbnail)) {
+          return toNotice("/admin/videos", "Vérifie le titre, la chaîne, le lien YouTube, la leçon, la langue et la durée.", "error");
+        }
+        const lessonRows = await sql`SELECT l.id,l.chapter_id,s.slug FROM curriculum_lesson l
+          JOIN curriculum_chapter c ON c.id=l.chapter_id
+          JOIN curriculum_module m ON m.id=c.module_id
+          JOIN curriculum_subject s ON s.id=m.subject_id
+          WHERE l.id=${lessonId} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE LIMIT 1`;
+        if (!lessonRows.length) return toNotice("/admin/videos", "Choisis une leçon publiée et valide.", "error");
+        const duplicate = await sql`SELECT id FROM video_resource WHERE video_id=${youtubeId} LIMIT 1`;
+        if (duplicate.length) return toNotice("/admin/videos", "Cette vidéo YouTube est déjà enregistrée. Modifie son association dans la liste.", "error");
+        const inserted = await sql`INSERT INTO video_resource
+          (title,channel,video_id,language,lesson_key,duration_minutes,verified,verification_status,active,created_by,created_at)
+          VALUES (${title},${channel},${youtubeId},${language},${lessonRows[0].slug},${duration},FALSE,'pending',TRUE,${user.id},NOW())
+          RETURNING id`;
+        const newVideoId = Number(inserted[0]?.id);
+        if (!newVideoId) throw new Error("video_insert_failed");
+        try {
+          await sql`INSERT INTO video_metadata (video_id,description,chapter_id,lesson_id,thumbnail_url)
+            VALUES (${newVideoId},${description},${lessonRows[0].chapter_id},${lessonId},${thumbnail || null})
+            ON CONFLICT (video_id) DO UPDATE SET description=EXCLUDED.description,chapter_id=EXCLUDED.chapter_id,lesson_id=EXCLUDED.lesson_id,thumbnail_url=EXCLUDED.thumbnail_url`;
+        } catch (error) {
+          await sql`DELETE FROM video_resource WHERE id=${newVideoId}`;
+          throw error;
+        }
+        return toNotice("/admin/videos", "Vidéo enregistrée et associée à la leçon. Vérifie-la puis publie-la.");
       }
+
+      return response("<h1>404 · Administration</h1>", 404);
+    }
       return response("<h1>404 · Administration</h1>", 404);
     }
 
