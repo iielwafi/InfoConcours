@@ -95,7 +95,6 @@ export function calculateXpSnapshot(
     String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))
   );
   const seenQuestions = new Set<number>();
-  let hasSeenInitialDiagnostic = false;
   let practiceXp = 0;
   let answeredQuestions = baseline.answered;
   let correctAnswers = baseline.correct;
@@ -106,7 +105,6 @@ export function calculateXpSnapshot(
       // question IDs are then marked as seen so they cannot be farmed later.
       // A later diagnostic retake does not retroactively remove XP already
       // earned through practice; it only prevents future repeat rewards.
-      if (!hasSeenInitialDiagnostic) hasSeenInitialDiagnostic = true;
       for (const detail of parseDetails(attempt.details)) {
         const id = Number(detail.question_id);
         if (Number.isInteger(id) && id > 0 && detail.selected !== null && detail.selected !== undefined) {
