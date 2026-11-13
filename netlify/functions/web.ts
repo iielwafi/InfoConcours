@@ -307,8 +307,8 @@ export default async function handler(request: Request): Promise<Response> {
       if (!rows.length) return response("<h1>404 · Exercice introuvable</h1>", 404);
       const x = rows[0] as Row;
       const kind = String(x.exercise_type);
-      let score: number | null = null, status = "pending", feedback = "Ta réponse a été envoyée pour correction.";
-      if (kind === "qcm" || kind === "true_false" || kind === "short") {
+      let score: number | null = null, status = "pending_manual", feedback = "Ta réponse a été envoyée pour correction.";
+      if (kind === "qcm" || kind === "true_false" || kind === "short_answer") {
         const accepted = [String(x.correct_answer ?? ""), ...parseJson(x.accepted_answers_json, [])].map((v: any) => String(v).trim().toLowerCase()).filter(Boolean);
         const ok = accepted.includes(answer.toLowerCase());
         score = ok ? 100 : 0; status = "evaluated"; feedback = ok ? String(x.feedback_fr || "Bonne réponse.") : String(x.solution_fr || "Réponse incorrecte.");
@@ -474,10 +474,10 @@ export default async function handler(request: Request): Promise<Response> {
         if (method === "POST") {
           const id = Number(form.get("attempt_id")), score = Number(form.get("score")), feedback = val(form, "feedback");
           if (!Number.isInteger(id) || !Number.isFinite(score) || score < 0 || score > 100) return toNotice("/admin/exercise-attempts", "Note invalide.", "error");
-          await sql`UPDATE exercise_attempt SET score=${score},feedback=${feedback},status='evaluated',evaluated_by=${user.id},evaluated_at=NOW() WHERE id=${id} AND status='pending'`;
+          await sql`UPDATE exercise_attempt SET score=${score},feedback=${feedback},status='evaluated',evaluated_by=${user.id},evaluated_at=NOW() WHERE id=${id} AND status='pending_manual'`;
           return redirect("/admin/exercise-attempts");
         }
-        const attempts = await sql`SELECT ea.id,ea.submitted_answer,ea.created_at,ea.status,x.title,x.prompt_fr,u.username FROM exercise_attempt ea JOIN course_exercise x ON x.id=ea.exercise_id JOIN "user" u ON u.id=ea.user_id WHERE ea.status='pending' ORDER BY ea.created_at ASC LIMIT 100`;
+        const attempts = await sql`SELECT ea.id,ea.submitted_answer,ea.created_at,ea.status,x.title,x.prompt_fr,u.username FROM exercise_attempt ea JOIN course_exercise x ON x.id=ea.exercise_id JOIN "user" u ON u.id=ea.user_id WHERE ea.status='pending_manual' ORDER BY ea.created_at ASC LIMIT 100`;
         const token = csrfForPage(request, session).token;
         const body = section("Réponses à corriger", '<div class="feature-grid">' + attempts.map((a: Row) => '<article class="feature"><div class="eyebrow">' + e(a.username) + ' · ' + e(formatDate(a.created_at)) + '</div><h3>' + e(a.title) + '</h3><p>' + e(a.prompt_fr) + '</p><blockquote>' + e(a.submitted_answer) + '</blockquote>' + postForm("/admin/exercise-attempts", token, hidden("attempt_id", String(a.id)) + field("Note (%)", "score", "number", "0", true) + field("Feedback", "feedback", "text") + btn("Valider la correction")) + '</article>').join("") + '</div>', attempts.length ? "Réponses ouvertes en attente d’évaluation." : "Aucune réponse en attente.");
         return pageResponse(request, user, session, "Réponses à corriger", body);
