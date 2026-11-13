@@ -12,8 +12,11 @@
 - Added a Node.js/TypeScript package manifest and TypeScript configuration.
 - Added Netlify build/function configuration.
 - Added a read-only `GET /api/health` probe. It executes only `SELECT 1` against Neon and does not expose database errors or credentials.
-- Added a Node test contract for the health endpoint.
+- Added Node tests for the health contract, signed-session integrity, CSRF token validation, and Werkzeug password-hash compatibility.
 - Added Node/Netlify build artifacts to `.gitignore`.
+- Added a Neon client helper that reuses a connection client on warm invocations.
+- Added signed, expiring application sessions and CSRF-token helpers.
+- Added password verification for existing Werkzeug `scrypt` and `pbkdf2` hashes; new hashes are emitted in Werkzeug-compatible scrypt format. Cross-checked both directions with Werkzeug locally.
 
 ## Not yet production-ready
 
