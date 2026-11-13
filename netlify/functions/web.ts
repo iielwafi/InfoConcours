@@ -502,6 +502,25 @@ export default async function handler(request: Request): Promise<Response> {
       }
 
       if (path === "/admin/videos" && method === "POST") {
+        const action = val(form, "action") || "create";
+        const videoId = Number(form.get("video_id"));
+        if (["verify", "reject", "unavailable", "pending"].includes(action)) {
+          const status = action === "verify" ? "verified" : action === "reject" ? "rejected" : action === "unavailable" ? "unavailable" : "pending";
+          await sql`UPDATE video_resource SET verification_status=${status},verified=${action === "verify"},verified_at=CASE WHEN ${action === "verify"} THEN NOW() ELSE NULL END WHERE id=${videoId}`;
+          return redirect("/admin/videos");
+        }
+        if (action === "toggle") {
+          await sql`UPDATE video_resource SET active=NOT active WHERE id=${videoId}`;
+          return redirect("/admin/videos");
+        }
+        if (action === "delete") {
+          const watches = await sql`SELECT id FROM video_watch WHERE video_id=${videoId} LIMIT 1`;
+          if (watches.length) return toNotice("/admin/videos", "Cette vidéo a déjà des suivis; désactive-la pour conserver l’historique.", "error");
+          await sql`DELETE FROM video_metadata WHERE video_id=${videoId}`;
+          await sql`DELETE FROM video_resource WHERE id=${videoId}`;
+          return redirect("/admin/videos");
+        }
+        if (action !== "create") return response("<h1>400 · Action invalide</h1>", 400);
         const title = val(form, "title"), channel = val(form, "channel"), raw = val(form, "url"), lessonKey = val(form, "lesson_key"), language = val(form, "language") || "Français";
         const match = raw.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{11})/);
         if (!title || !channel || !match || !lessonKey) return toNotice("/admin/videos", "Vérifie le titre, la chaîne, l’URL YouTube et la clé de leçon.", "error");
