@@ -48,7 +48,7 @@ async function requirePostCsrf(request: Request, form: FormData, session: any): 
 }
 async function getQuestions(sql: any, ids: number[]): Promise<Row[]> {
   if (!ids.length) return [];
-  const rows = await sql`SELECT ${sql(questionSelect)} FROM question WHERE active = TRUE AND id = ANY(${ids}::int[])`;
+  const rows = await sql`SELECT id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar FROM question WHERE active = TRUE AND id = ANY(${ids}::int[])`;
   const byId = new Map(rows.map((row: Row) => [Number(row.id), row]));
   return ids.map((id) => byId.get(id)).filter(Boolean) as Row[];
 }
@@ -198,7 +198,7 @@ export default async function handler(request: Request): Promise<Response> {
         const domains = await sql`SELECT name FROM curriculum_subject WHERE published=TRUE ORDER BY position,name`;
         const selected: Row[] = [];
         for (const d of domains) {
-          const rows = await sql`SELECT ${sql(questionSelect)} FROM question WHERE active=TRUE AND domain=${String(d.name)} ORDER BY random() LIMIT 3`;
+          const rows = await sql`SELECT id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar FROM question WHERE active=TRUE AND domain=${String(d.name)} ORDER BY random() LIMIT 3`;
           selected.push(...rows as Row[]);
         }
         const token = csrfForPage(request, session).token;
@@ -267,7 +267,7 @@ export default async function handler(request: Request): Promise<Response> {
       if (!lessons.length) return response("<h1>404 · Leçon introuvable</h1>", 404);
       const lesson = lessons[0] as Row;
       if (method === "POST") {
-        const meta = await sql`SELECT q.${sql(questionSelect)} FROM question q JOIN question_metadata qm ON qm.question_id=q.id WHERE qm.chapter_id=${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id`;
+        const meta = await sql`SELECT q.id, q.domain, q.topic, q.level, q.prompt_fr, q.prompt_ar, q.options_fr, q.options_ar, q.answer, q.explanation_fr, q.explanation_ar FROM question q JOIN question_metadata qm ON qm.question_id=q.id WHERE qm.chapter_id=${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id`;
         const details = (meta as Row[]).map((q) => detailsFor(q, form.has("a" + q.id) ? val(form, "a" + q.id) : null));
         if (!details.length) return toNotice("/courses/" + slug + "/lesson/" + lessonId, "Aucun QCM publié n’est associé à ce chapitre.", "error");
         const attempt = await recordAttempt(sql, user.id, "qcm", details);
@@ -280,7 +280,7 @@ export default async function handler(request: Request): Promise<Response> {
       await sql`INSERT INTO lesson_progress (user_id,lesson_key,evidence_count) VALUES (${user.id},${"lesson:" + lessonId},0) ON CONFLICT (user_id,lesson_key) DO UPDATE SET updated_at=NOW()`;
       const exercises = await sql`SELECT id,title,prompt_fr,prompt_ar,solution_fr,solution_ar,exercise_type,options_json,correct_answer,accepted_answers_json,feedback_fr,level FROM course_exercise WHERE lesson_id=${lessonId} AND published=TRUE ORDER BY id`;
       const videos = await sql`SELECT v.id,v.title,v.channel,v.video_id,v.language,v.duration_minutes,vm.description FROM video_metadata vm JOIN video_resource v ON v.id=vm.video_id WHERE (vm.lesson_id=${lessonId} OR (vm.lesson_id IS NULL AND vm.chapter_id=${Number(lesson.chapter_id)})) AND v.active=TRUE AND v.verified=TRUE AND v.verification_status='verified' ORDER BY v.title`;
-      const qs = await sql`SELECT q.${sql(questionSelect)},qm.learning_objective FROM question q JOIN question_metadata qm ON qm.question_id=q.id WHERE qm.chapter_id=${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id`;
+      const qs = await sql`SELECT q.id, q.domain, q.topic, q.level, q.prompt_fr, q.prompt_ar, q.options_fr, q.options_ar, q.answer, q.explanation_fr, q.explanation_ar,qm.learning_objective FROM question q JOIN question_metadata qm ON qm.question_id=q.id WHERE qm.chapter_id=${Number(lesson.chapter_id)} AND q.active=TRUE ORDER BY q.id`;
       const csrf = csrfForPage(request, session).token;
       const body = '<section class="section"><div class="eyebrow">' + e(lesson.subject_name) + ' · ' + e(lesson.module_title) + '</div><h2>' + e(lesson.title) + '</h2><p>' + e(lesson.chapter_title) + '</p><div class="lesson-content">' +
         '<h3>Objectifs</h3><p>' + e(parseJson(lesson.objectives_fr, []).join(" · ")) + '</p><h3>Prérequis</h3><p>' + e(lesson.prerequisites_fr) + '</p><h3>Cours</h3><div>' + String(lesson.theory_fr ?? "").replace(/\n/g, "<br>") + '</div><h3>Exemple</h3><p>' + e(lesson.example_fr) + '</p><pre><code>' + e(lesson.code_example) + '</code></pre><h3>À retenir</h3><p>' + e(lesson.summary_fr) + '</p><h3>Révision</h3><p>' + e(lesson.revision_fr) + '</p></div>' +
@@ -320,7 +320,7 @@ export default async function handler(request: Request): Promise<Response> {
     if (path === "/qcm" && (method === "GET" || method === "POST")) {
       if (method === "GET") {
         const domain = url.searchParams.get("domain") ?? "", level = url.searchParams.get("level") ?? "";
-        const qs = await sql`SELECT ${sql(questionSelect)} FROM question WHERE active=TRUE AND (${domain}='' OR domain=${domain}) AND (${level}='' OR level=${level}) ORDER BY random() LIMIT 15`;
+        const qs = await sql`SELECT id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar FROM question WHERE active=TRUE AND (${domain}='' OR domain=${domain}) AND (${level}='' OR level=${level}) ORDER BY random() LIMIT 15`;
         const token = csrfForPage(request, session).token;
         const body = '<section class="section"><div class="section-head"><div class="eyebrow">ENTRAÎNEMENT</div><h2>Teste tes connaissances.</h2><p>Une série de 15 questions corrigées après soumission.</p></div>' +
           '<form method="get" action="/qcm">' + field("Matière (optionnel)", "domain") + field("Niveau (optionnel)", "level") + '<button class="btn ghost">Filtrer</button></form>' +
@@ -341,7 +341,7 @@ export default async function handler(request: Request): Promise<Response> {
 
     if (path === "/exam" && (method === "GET" || method === "POST")) {
       if (method === "GET") {
-        const qs = await sql`SELECT ${sql(questionSelect)} FROM question WHERE active=TRUE ORDER BY random() LIMIT 30`;
+        const qs = await sql`SELECT id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar FROM question WHERE active=TRUE ORDER BY random() LIMIT 30`;
         const token = csrfForPage(request, session).token, started = Date.now();
         const runId = createSession({ userId: user.id, role: user.role, language: session?.language ?? "fr" });
         const body = '<section class="section"><div class="section-head"><div class="eyebrow">EXAMEN BLANC</div><h2>Simulation de concours.</h2><p>30 questions · ' + Math.max(5, Math.min(240, Number(process.env.EXAM_DURATION_MINUTES ?? 240))) + ' minutes.</p></div>' +
