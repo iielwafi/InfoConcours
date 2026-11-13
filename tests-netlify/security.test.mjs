@@ -13,7 +13,7 @@ test("Werkzeug scrypt and PBKDF2 hashes remain compatible", () => {
 
 test("new password hashes verify and reject wrong passwords", () => {
   const encoded = hashPassword("correct horse battery staple");
-  assert.match(encoded, /^scrypt:32768:8:1\\$/);
+  assert.match(encoded, /^scrypt:32768:8:1\$/);
   assert.equal(verifyPassword("correct horse battery staple", encoded), true);
   assert.equal(verifyPassword("wrong password", encoded), false);
   assert.equal(verifyPassword("anything", "invalid"), false);
