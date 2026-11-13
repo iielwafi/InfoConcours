@@ -90,7 +90,7 @@ function shortAnswerMatches(submitted: string, accepted: string[]): boolean {
 async function evaluateOpenAnswer(exercise: Row, answer: string): Promise<Row> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("not_configured");
-  const model = (process.env.EXERCISE_GRADING_MODEL || "gpt-4o-mini").trim();
+  const model = (process.env.EXERCISE_GRADING_MODEL || process.env.AI_TUTOR_MODEL || "gpt-6-luna").trim();
   const controller = AbortSignal.timeout(20_000);
   const prompt = {
     title: exercise.title,
@@ -662,7 +662,7 @@ export default async function handler(request: Request): Promise<Response> {
       return toNotice("/courses/" + completeMatch[1] + "/lesson/" + lessonId, "Leçon marquée comme terminée.");
     }
 
-    const exerciseMatch = path.match(/^\\/exercise\\/(\\d+)\\/attempt$/);
+    const exerciseMatch = path.match(/^\/exercise\/(\d+)\/attempt$/);
     if (exerciseMatch && method === "POST") {
       const exerciseId = Number(exerciseMatch[1]), answer = String(form.get("answer") ?? "").trim();
       if (!answer || answer.length > 12000) return toNotice("/courses/continue", "Saisis une réponse de 1 à 12 000 caractères.", "error");
@@ -681,7 +681,7 @@ export default async function handler(request: Request): Promise<Response> {
 
       if (kind === "qcm") {
         const options = parseJson(x.options_json, []);
-        const valid = /^\\d+$/.test(answer) && Number(answer) >= 0 && Number(answer) < options.length;
+        const valid = /^\d+$/.test(answer) && Number(answer) >= 0 && Number(answer) < options.length;
         isCorrect = valid && answer === String(x.correct_answer);
         correctAnswer = options[Number(x.correct_answer)] ?? correctAnswer;
         score = isCorrect ? 100 : 0;
@@ -714,7 +714,7 @@ export default async function handler(request: Request): Promise<Response> {
             const parts = [labels[String(result.classification)] + " — " + String(result.explanation_fr)];
             if (Array.isArray(result.missing_concepts) && result.missing_concepts.length) parts.push("Notions à compléter : " + result.missing_concepts.map(String).join(", "));
             if (result.expected_answer_fr) parts.push("Correction attendue : " + String(result.expected_answer_fr));
-            feedback = parts.join("\\n\\n").slice(0, 8000);
+            feedback = parts.join("\n\n").slice(0, 8000);
           } else {
             status = "ai_retry";
             feedback = "Je ne suis pas assez sûr pour noter cette réponse correctement. Ajoute les étapes de ton raisonnement ou reformule-la, puis renvoie-la.";
