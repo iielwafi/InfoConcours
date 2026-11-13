@@ -1042,7 +1042,6 @@ export default async function handler(request: Request): Promise<Response> {
             GROUP BY l.id,l.title,c.title,m.title,s.name,s.slug
             ORDER BY s.name,m.title,c.title,l.id`
         ]);
-        const curatedLessonTitles = new Set(CURATED_FRENCH_VIDEOS.map((video) => video.lessonTitle));
         const missingFrenchLessons = (lessons as Row[]).filter((lesson) => MISSING_FRENCH_VIDEO_LESSONS.includes(String(lesson.title) as typeof MISSING_FRENCH_VIDEO_LESSONS[number]));
         const lessonOptions = '<option value="">Choisir le cours…</option>' + (lessons as Row[]).map((l) =>
           '<option value="' + Number(l.id) + '">' + e(l.subject_name) + ' · ' + e(l.module_title) + ' · ' + e(l.title) +
