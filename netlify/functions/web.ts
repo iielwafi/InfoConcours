@@ -552,11 +552,29 @@ export default async function handler(request: Request): Promise<Response> {
         WHERE (vm.lesson_id=${lessonId} OR (vm.lesson_id IS NULL AND vm.chapter_id=${Number(lesson.chapter_id)}))
           AND v.active=TRUE AND v.verified=TRUE AND v.verification_status='verified'
         ORDER BY v.title`;
-      const videoIds = (videos as Row[]).map((v) => Number(v.id));
+      const storedVideoRows = videos as Row[];
+      const videoIds = storedVideoRows.map((v) => Number(v.id));
       const watchedRows = videoIds.length
         ? await sql`SELECT video_id FROM video_watch WHERE user_id=${user.id} AND video_id=ANY(${videoIds}::int[])`
         : [];
       const watchedVideoIds = new Set((watchedRows as Row[]).map((v) => Number(v.video_id)));
+      const storedVideoIds = new Set(storedVideoRows.map((v) => String(v.video_id)));
+      const curatedLessonVideos = CURATED_FRENCH_VIDEOS
+        .filter((video) => video.lessonTitle === String(lesson.title) && !storedVideoIds.has(video.videoId))
+        .map((video) => ({
+          id: null,
+          title: video.title,
+          channel: video.channel,
+          video_id: video.videoId,
+          language: "Français",
+          duration_minutes: null,
+          description: video.description,
+          curated: true,
+        }));
+      const lessonVideos = [
+        ...storedVideoRows.map((video) => ({ ...video, curated: false })),
+        ...curatedLessonVideos,
+      ];
 
       const qs = await sql`SELECT q.id,q.domain,q.topic,q.level,q.prompt_fr,q.prompt_ar,q.options_fr,q.options_ar,q.answer,q.explanation_fr,q.explanation_ar,qm.learning_objective
         FROM question q JOIN question_metadata qm ON qm.question_id=q.id
@@ -565,16 +583,18 @@ export default async function handler(request: Request): Promise<Response> {
       const lessonProgress = await sql`SELECT evidence_count FROM lesson_progress WHERE user_id=${user.id} AND lesson_key=${"lesson:" + lessonId} LIMIT 1`;
       const completion = await sql`SELECT id FROM lesson_completion WHERE user_id=${user.id} AND lesson_id=${lessonId} LIMIT 1`;
 
-      const videoHtml = (videos as Row[]).length
-        ? '<div class="lesson-video-list">' + (videos as Row[]).map((v) =>
+      const videoHtml = lessonVideos.length
+        ? '<div class="lesson-video-list">' + lessonVideos.map((v) =>
             '<article class="lesson-video"><div class="video-frame"><iframe src="https://www.youtube-nocookie.com/embed/' + e(v.video_id) + '" title="' + e(v.title) + ' — ' + e(v.channel) + '" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>' +
             '<div class="qmeta"><span>' + e(v.language) + '</span><span>' + (v.duration_minutes ? e(v.duration_minutes) + ' min' : 'Durée non renseignée') + '</span></div>' +
             '<h3>' + e(v.title) + '</h3><p class="muted">' + e(v.channel) + '</p>' +
             (v.description ? '<p>' + e(v.description) + '</p>' : '') +
-            postForm("/videos/" + v.id + "/watched", csrf, hidden("next", "/courses/" + slug + "/lesson/" + lessonId) + btn(watchedVideoIds.has(Number(v.id)) ? "Visionnée ✓" : "Marquer comme visionnée")) +
+            (v.curated
+              ? '<p class="muted video-source-note">Vidéo recommandée pour cette leçon.</p>'
+              : postForm("/videos/" + v.id + "/watched", csrf, hidden("next", "/courses/" + slug + "/lesson/" + lessonId) + btn(watchedVideoIds.has(Number(v.id)) ? "Visionnée ✓" : "Marquer comme visionnée"))) +
             '</article>'
           ).join("") + '</div>'
-        : '<div class="empty-note"><b>Aucune vidéo vérifiée pour ce chapitre, pour le moment.</b><p class="muted">Une vidéo apparaîtra après validation par l’administration.</p><a href="/videos">Consulter les autres vidéos validées ↗</a></div>';
+        : '<div class="empty-note"><b>Aucune vidéo disponible pour cette leçon, pour le moment.</b><p class="muted">Les nouvelles ressources apparaîtront ici dès qu’elles seront associées à ce cours.</p><a href="/videos">Consulter la vidéothèque ↗</a></div>';
 
       const exerciseHtml = (exercises as Row[]).length
         ? (exercises as Row[]).map((x) => {
@@ -651,14 +671,14 @@ export default async function handler(request: Request): Promise<Response> {
         '<div class="eyebrow"><a href="/courses">ACADÉMIE</a> · ' + e(lesson.subject_name) + ' · ' + e(lesson.module_title) + '</div>' +
         '<h1>' + e(lesson.title) + '</h1><p class="muted">Chapitre : ' + e(lesson.chapter_title) + ' · Ressource de préparation.</p><div class="actions"><a class="btn primary" href="/tutor?lesson_id=' + lessonId + '">Demander au professeur IA ✦</a></div>' +
         '<div class="actions lesson-nav">' + (completion.length ? '<span class="tag">Leçon terminée ✓</span>' : postForm("/courses/" + slug + "/lesson/" + lessonId + "/complete", csrf, btn("Marquer comme terminée"))) + '</div>' +
-        '<div class="lesson-layout"><aside class="panel lesson-toc"><div class="eyebrow">DANS CETTE LEÇON</div><a href="#objectifs">Objectifs</a><a href="#explication">Explication</a><a href="#exemple">Exemple pratique</a><a href="#videos">Vidéos vérifiées</a><a href="#exercises">Exercices</a><a href="#quiz">QCM du chapitre</a><a href="#revision">Résumé et révision</a><small class="muted">Progression : ' + e(lessonProgress[0]?.evidence_count ?? 0) + ' réponses contributives</small></aside>' +
+        '<div class="lesson-layout"><aside class="panel lesson-toc"><div class="eyebrow">DANS CETTE LEÇON</div><a href="#objectifs">Objectifs</a><a href="#explication">Explication</a><a href="#exemple">Exemple pratique</a><a href="#videos">Vidéos du cours</a><a href="#exercises">Exercices</a><a href="#quiz">QCM du chapitre</a><a href="#revision">Résumé et révision</a><small class="muted">Progression : ' + e(lessonProgress[0]?.evidence_count ?? 0) + ' réponses contributives</small></aside>' +
         '<article class="panel lesson-content">' +
         '<section id="objectifs"><div class="eyebrow">OBJECTIFS D’APPRENTISSAGE</div><ul>' + parseJson(lesson.objectives_fr, []).map((o: string) => '<li>' + e(o) + '</li>').join("") + '</ul><h2>Prérequis</h2><p class="muted">' + e(lesson.prerequisites_fr) + '</p></section>' +
         '<section id="explication"><div class="eyebrow">LE COURS</div><h2>Explication détaillée</h2><div class="translation-pair"><div class="lesson-copy lang-fr"><div class="theory-body">' + e(lesson.theory_fr).replace(/\n/g, "<br>") + '</div></div>' +
         (lesson.theory_ar ? '<div class="lang-ar darija" lang="ar" dir="rtl">' + e(lesson.theory_ar).replace(/\n/g, "<br>") + '</div>' : '') + '</div></section>' +
         '<section id="exemple"><h2>Exemple pratique</h2><div class="theory-body">' + e(lesson.example_fr) + '</div>' +
         (lesson.code_example ? '<pre class="code-example"><code>' + e(lesson.code_example) + '</code></pre>' : '') + '</section>' +
-        '<section id="videos"><div class="eyebrow">RESSOURCES VIDÉO VALIDÉES</div><h2>Regarder et réviser</h2>' + videoHtml + '</section>' +
+        '<section id="videos"><div class="eyebrow">RESSOURCES VIDÉO DU COURS</div><h2>Regarder et réviser</h2>' + videoHtml + '</section>' +
         '<section id="exercises"><div class="eyebrow">ENTRAÎNEMENT GUIDÉ</div><h2>Exercices et corrections</h2><div class="feature-grid">' + exerciseHtml + '</div></section>' +
         '<section id="quiz"><h2>QCM du chapitre</h2>' + ((qs as Row[]).length ? postForm("/courses/" + slug + "/lesson/" + lessonId, csrf, (qs as Row[]).map((q) => questionBlock(q, csrf)).join("") + btn("Envoyer le QCM")) : '<p>Aucun QCM publié pour ce chapitre.</p>') + '</section>' +
         '<section id="revision"><h2>Résumé</h2><p>' + e(lesson.summary_fr) + '</p><h3>Révision</h3><p>' + e(lesson.revision_fr) + '</p></section>' +
@@ -891,7 +911,33 @@ export default async function handler(request: Request): Promise<Response> {
       const watched = await sql`SELECT video_id FROM video_watch WHERE user_id=${user.id}`;
       const watchedIds = new Set(watched.map((r: Row) => Number(r.video_id)));
       const token = csrfForPage(request, session).token;
-      const body = section("Vidéothèque", '<div class="feature-grid">' + rows.map((v: Row) => '<article class="feature"><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + ' · ' + e(v.language) + '</p><iframe title="' + e(v.title) + '" src="https://www.youtube-nocookie.com/embed/' + e(v.video_id) + '" loading="lazy" allowfullscreen></iframe><p>' + e(v.description) + '</p>' + postForm("/videos/" + v.id + "/watched", token, hidden("next", "/videos") + btn(watchedIds.has(Number(v.id)) ? "Déjà visionnée" : "Marquer comme visionnée")) + '</article>').join("") + '</div>', rows.length ? "Ressources validées par l’administration." : "Aucune vidéo vérifiée pour le moment.");
+      const curatedLessonTitles = CURATED_FRENCH_VIDEOS.map((video) => video.lessonTitle);
+      const curatedLessons = await sql`SELECT l.id,l.title,s.slug,s.name AS subject_name
+        FROM curriculum_lesson l
+        JOIN curriculum_chapter c ON c.id=l.chapter_id
+        JOIN curriculum_module m ON m.id=c.module_id
+        JOIN curriculum_subject s ON s.id=m.subject_id
+        WHERE l.title=ANY(${curatedLessonTitles}::text[]) AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE
+        ORDER BY s.position,m.position,c.position,l.id`;
+      const lessonByTitle = new Map((curatedLessons as Row[]).map((lesson) => [String(lesson.title), lesson]));
+      const storedVideoIds = new Set((rows as Row[]).map((video) => String(video.video_id)));
+      const curatedVideos = CURATED_FRENCH_VIDEOS
+        .filter((video) => !storedVideoIds.has(video.videoId))
+        .map((video) => ({ ...video, lesson: lessonByTitle.get(video.lessonTitle) }))
+        .filter((video) => Boolean(video.lesson));
+      const verifiedHtml = (rows as Row[]).map((v) =>
+        '<article class="feature"><div class="eyebrow">RESSOURCE VALIDÉE</div><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + ' · ' + e(v.language) + '</p><iframe title="' + e(v.title) + '" src="https://www.youtube-nocookie.com/embed/' + e(v.video_id) + '" loading="lazy" allowfullscreen></iframe><p>' + e(v.description) + '</p>' +
+        postForm("/videos/" + v.id + "/watched", token, hidden("next", "/videos") + btn(watchedIds.has(Number(v.id)) ? "Déjà visionnée" : "Marquer comme visionnée")) + '</article>'
+      ).join("");
+      const curatedHtml = curatedVideos.map((v) =>
+        '<article class="feature"><div class="eyebrow">' + e(v.lesson!.subject_name) + ' · ' + e(v.lesson!.title) + '</div><h3>' + e(v.title) + '</h3><p>' + e(v.channel) + ' · Français · Vidéo recommandée</p>' +
+        '<iframe title="' + e(v.title) + '" src="https://www.youtube-nocookie.com/embed/' + e(v.videoId) + '" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>' +
+        '<p>' + e(v.description) + '</p><a class="btn ghost" href="/courses/' + encodeURIComponent(String(v.lesson!.slug)) + '/lesson/' + Number(v.lesson!.id) + '">Ouvrir la leçon associée ↗</a></article>'
+      ).join("");
+      const totalVideos = (rows as Row[]).length + curatedVideos.length;
+      const body = section("Vidéothèque", '<div class="feature-grid">' + verifiedHtml + curatedHtml + '</div>', totalVideos
+        ? "Chaque vidéo est associée à la leçon correspondante. Ouvre directement le cours pour retrouver sa ressource."
+        : "Aucune vidéo n’est disponible pour le moment.");
       return pageResponse(request, user, session, "Vidéothèque", body);
     }
 
