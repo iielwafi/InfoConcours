@@ -465,9 +465,54 @@ export default async function handler(request: Request): Promise<Response> {
       }
 
       if (path === "/admin/curriculum" && method === "GET") {
-        const subjects = await sql`SELECT s.id,s.name,s.slug,s.published,COUNT(l.id) AS lessons FROM curriculum_subject s LEFT JOIN curriculum_module m ON m.subject_id=s.id LEFT JOIN curriculum_chapter c ON c.module_id=m.id LEFT JOIN curriculum_lesson l ON l.chapter_id=c.id GROUP BY s.id ORDER BY s.position,s.name`;
-        const body = section("Académie et programme", '<div class="feature-grid">' + subjects.map((s: Row) => card(s.name, e(s.lessons) + " leçons · " + (s.published ? "publiée" : "masquée"), s.slug)).join("") + '</div>', "Consultation du curriculum. Les modifications détaillées restent disponibles dans la version Flask pendant la migration.");
+        const [subjects, modules, chapters, lessons, exercises] = await Promise.all([
+          sql`SELECT id,name,slug,published FROM curriculum_subject ORDER BY position,name`,
+          sql`SELECT m.id,m.title,m.published,s.name AS subject_name FROM curriculum_module m JOIN curriculum_subject s ON s.id=m.subject_id ORDER BY s.position,m.position`,
+          sql`SELECT c.id,c.title,c.published,m.title AS module_title FROM curriculum_chapter c JOIN curriculum_module m ON m.id=c.module_id ORDER BY m.position,c.position`,
+          sql`SELECT l.id,l.title,l.published,c.title AS chapter_title FROM curriculum_lesson l JOIN curriculum_chapter c ON c.id=l.chapter_id ORDER BY l.id DESC LIMIT 100`,
+          sql`SELECT x.id,x.title,x.published,x.exercise_type,l.title AS lesson_title FROM course_exercise x JOIN curriculum_lesson l ON l.id=x.lesson_id ORDER BY x.id DESC LIMIT 100`,
+        ]);
+        const token = csrfForPage(request, session).token;
+        const toggle = (action: string, id: number, published: boolean, label: string) =>
+          postForm("/admin/curriculum", token, hidden("action", action) + hidden("id", String(id)) + btn((published ? "Dépublier " : "Publier ") + label));
+        const body = section("Académie et programme", '<div class="feature-grid">' +
+          subjects.map((s: Row) => '<article class="feature"><div class="eyebrow">' + e(s.slug) + '</div><h3>' + e(s.name) + '</h3><p>' + (s.published ? "Publiée" : "Brouillon") + '</p>' + toggle("toggle_subject", Number(s.id), Boolean(s.published), "la matière") + '</article>').join("") +
+          modules.map((m: Row) => '<article class="feature"><div class="eyebrow">' + e(m.subject_name) + '</div><h3>' + e(m.title) + '</h3><p>' + (m.published ? "Publié" : "Brouillon") + '</p>' + toggle("toggle_module", Number(m.id), Boolean(m.published), "le module") + '</article>').join("") +
+          chapters.map((ch: Row) => '<article class="feature"><div class="eyebrow">' + e(ch.module_title) + '</div><h3>' + e(ch.title) + '</h3><p>' + (ch.published ? "Publié" : "Brouillon") + '</p>' + toggle("toggle_chapter", Number(ch.id), Boolean(ch.published), "le chapitre") + '</article>').join("") +
+          lessons.map((l: Row) => '<article class="feature"><div class="eyebrow">' + e(l.chapter_title) + '</div><h3>' + e(l.title) + '</h3><p>' + (l.published ? "Publiée" : "Brouillon") + '</p>' + toggle("toggle_lesson", Number(l.id), Boolean(l.published), "la leçon") + '</article>').join("") +
+          exercises.map((x: Row) => '<article class="feature"><div class="eyebrow">' + e(x.lesson_title) + ' · ' + e(x.exercise_type) + '</div><h3>' + e(x.title) + '</h3><p>' + (x.published ? "Publié" : "Brouillon") + '</p>' + toggle("toggle_exercise", Number(x.id), Boolean(x.published), "l’exercice") + '</article>').join("") +
+          '</div><h3>Créer un module</h3>' + postForm("/admin/curriculum", token, hidden("action", "create_module") + '<label>Matière</label><select name="subject_id" class="field">' + subjects.map((s: Row) => '<option value="' + s.id + '">' + e(s.name) + '</option>').join("") + '</select>' + field("Titre du module", "title", "text", "", true) + field("Position", "position", "number", "0") + btn("Créer le module")) +
+          '<h3>Créer un chapitre</h3>' + postForm("/admin/curriculum", token, hidden("action", "create_chapter") + '<label>Module</label><select name="module_id" class="field">' + modules.map((m: Row) => '<option value="' + m.id + '">' + e(m.subject_name + " · " + m.title) + '</option>').join("") + '</select>' + field("Titre", "title", "text", "", true) + field("Position", "position", "number", "0") + btn("Créer le chapitre")) +
+          '<h3>Créer une leçon (brouillon)</h3>' + postForm("/admin/curriculum", token, hidden("action", "create_lesson") + '<label>Chapitre</label><select name="chapter_id" class="field">' + chapters.map((ch: Row) => '<option value="' + ch.id + '">' + e(ch.module_title + " · " + ch.title) + '</option>').join("") + '</select>' + field("Titre", "title", "text", "", true) + '<label>Objectifs (un par ligne)</label><textarea name="objectives_fr" class="field" rows="3"></textarea>' + '<label>Prérequis</label><textarea name="prerequisites_fr" class="field" rows="2"></textarea>' + '<label>Cours en français</label><textarea name="theory_fr" class="field" rows="6" required></textarea><label>Cours en Darija</label><textarea name="theory_ar" class="field" rows="6" required></textarea>' + field("Exemple", "example_fr", "text") + '<label>Code exemple</label><textarea name="code_example" class="field" rows="3"></textarea>' + '<label>Exercice</label><textarea name="exercise_fr" class="field" rows="2"></textarea><label>Solution</label><textarea name="solution_fr" class="field" rows="2"></textarea><label>Résumé</label><textarea name="summary_fr" class="field" rows="2"></textarea><label>Révision</label><textarea name="revision_fr" class="field" rows="2"></textarea>' + btn("Créer en brouillon")) +
+          '</section>';
         return pageResponse(request, user, session, "Académie et programme", body);
+      }
+
+      if (path === "/admin/curriculum" && method === "POST") {
+        const action = val(form, "action");
+        const id = Number(form.get("id"));
+        if (action === "toggle_subject") await sql`UPDATE curriculum_subject SET published=NOT published WHERE id=${id}`;
+        else if (action === "toggle_module") await sql`UPDATE curriculum_module SET published=NOT published WHERE id=${id}`;
+        else if (action === "toggle_chapter") await sql`UPDATE curriculum_chapter SET published=NOT published WHERE id=${id}`;
+        else if (action === "toggle_lesson") await sql`UPDATE curriculum_lesson SET published=NOT published WHERE id=${id}`;
+        else if (action === "toggle_exercise") await sql`UPDATE course_exercise SET published=NOT published WHERE id=${id}`;
+        else if (action === "create_module") {
+          const subjectId = Number(form.get("subject_id")), title = val(form, "title"), position = Math.max(0, Math.min(10000, Number(form.get("position") ?? 0)));
+          if (!subjectId || !title || !Number.isInteger(position)) return toNotice("/admin/curriculum", "Informations du module invalides.", "error");
+          await sql`INSERT INTO curriculum_module (subject_id,title,position,published) VALUES (${subjectId},${title.slice(0,160)},${position},FALSE)`;
+        } else if (action === "create_chapter") {
+          const moduleId = Number(form.get("module_id")), title = val(form, "title"), position = Math.max(0, Math.min(10000, Number(form.get("position") ?? 0)));
+          if (!moduleId || !title || !Number.isInteger(position)) return toNotice("/admin/curriculum", "Informations du chapitre invalides.", "error");
+          await sql`INSERT INTO curriculum_chapter (module_id,title,position,published) VALUES (${moduleId},${title.slice(0,160)},${position},FALSE)`;
+        } else if (action === "create_lesson") {
+          const chapterId = Number(form.get("chapter_id")), title = val(form, "title"), theory = val(form, "theory_fr"), darija = val(form, "theory_ar");
+          if (!chapterId || !title || !theory || !darija) return toNotice("/admin/curriculum", "La leçon doit avoir un titre et un cours en français et Darija.", "error");
+          const objectives = val(form, "objectives_fr").split("\n").map((x) => x.trim()).filter(Boolean);
+          await sql`INSERT INTO curriculum_lesson (chapter_id,title,objectives_fr,prerequisites_fr,theory_fr,theory_ar,example_fr,code_example,exercise_fr,solution_fr,summary_fr,revision_fr,published) VALUES (${chapterId},${title.slice(0,200)},${JSON.stringify(objectives)},${val(form, "prerequisites_fr")},${theory.slice(0,12000)},${darija.slice(0,12000)},${val(form, "example_fr")},${val(form, "code_example")},${val(form, "exercise_fr")},${val(form, "solution_fr")},${val(form, "summary_fr")},${val(form, "revision_fr")},FALSE)`;
+        } else {
+          return response("<h1>400 · Action invalide</h1>", 400);
+        }
+        return redirect("/admin/curriculum");
       }
 
       if (path === "/admin/exercise-attempts" && (method === "GET" || method === "POST")) {
