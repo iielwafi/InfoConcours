@@ -95,22 +95,26 @@ export function calculateXpSnapshot(
     String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""))
   );
   const seenQuestions = new Set<number>();
-
-  for (const attempt of orderedAttempts) {
-    if (attempt.mode !== "diagnostic") continue;
-    for (const detail of parseDetails(attempt.details)) {
-      const id = Number(detail.question_id);
-      if (Number.isInteger(id) && id > 0 && detail.selected !== null && detail.selected !== undefined) {
-        seenQuestions.add(id);
-      }
-    }
-  }
-
+  let hasSeenInitialDiagnostic = false;
   let practiceXp = 0;
   let answeredQuestions = baseline.answered;
   let correctAnswers = baseline.correct;
 
   for (const attempt of orderedAttempts) {
+    if (attempt.mode === "diagnostic") {
+      // The diagnostic itself earns the one-time baseline XP above. Its
+      // question IDs are then marked as seen so they cannot be farmed later.
+      // A later diagnostic retake does not retroactively remove XP already
+      // earned through practice; it only prevents future repeat rewards.
+      if (!hasSeenInitialDiagnostic) hasSeenInitialDiagnostic = true;
+      for (const detail of parseDetails(attempt.details)) {
+        const id = Number(detail.question_id);
+        if (Number.isInteger(id) && id > 0 && detail.selected !== null && detail.selected !== undefined) {
+          seenQuestions.add(id);
+        }
+      }
+      continue;
+    }
     if (attempt.mode !== "qcm" && attempt.mode !== "exam") continue;
     for (const detail of parseDetails(attempt.details)) {
       const id = Number(detail.question_id);
