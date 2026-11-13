@@ -1196,8 +1196,6 @@ export default async function handler(request: Request): Promise<Response> {
 
       return response("<h1>404 · Administration</h1>", 404);
     }
-      return response("<h1>404 · Administration</h1>", 404);
-    }
 
     return response("<h1>404 · Page introuvable</h1><p><a href='/dashboard'>Retour au tableau de bord</a></p>", 404);
   } catch (error) {
