@@ -4,6 +4,7 @@ const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
 export function extractYoutubeVideoId(raw: string): string | null {
   try {
     const url = new URL(raw.trim());
+    if (url.protocol !== "https:") return null;
     const host = url.hostname.toLowerCase().replace(/^www\./, "");
     if (host === "youtu.be") {
       const candidate = url.pathname.split("/").filter(Boolean)[0] ?? "";
