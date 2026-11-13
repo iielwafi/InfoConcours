@@ -566,7 +566,7 @@ export default async function handler(request: Request): Promise<Response> {
 
       const videoHtml = (videos as Row[]).length
         ? '<div class="lesson-video-list">' + (videos as Row[]).map((v) =>
-            '<article class="lesson-video"><div class="video-frame"><iframe src="https://www.youtube-nocookie.com/embed/' + e(v.video_id) + '" title="' + e(v.title) + ' — ' + e(v.channel) + '" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></div>' +
+            '<article class="lesson-video"><div class="video-frame"><iframe src="https://www.youtube-nocookie.com/embed/' + e(v.video_id) + '" title="' + e(v.title) + ' — ' + e(v.channel) + '" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe></div>' +
             '<div class="qmeta"><span>' + e(v.language) + '</span><span>' + (v.duration_minutes ? e(v.duration_minutes) + ' min' : 'Durée non renseignée') + '</span></div>' +
             '<h3>' + e(v.title) + '</h3><p class="muted">' + e(v.channel) + '</p>' +
             (v.description ? '<p>' + e(v.description) + '</p>' : '') +
@@ -1039,7 +1039,7 @@ export default async function handler(request: Request): Promise<Response> {
             LEFT JOIN video_resource v ON v.id=vm.video_id
             WHERE l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE
             GROUP BY l.id,l.title,c.title,m.title,s.name,s.slug
-            ORDER BY s.position,m.position,c.position,l.id`
+            ORDER BY s.name,m.title,c.title,l.id`
         ]);
         const lessonOptions = '<option value="">Choisir le cours…</option>' + (lessons as Row[]).map((l) =>
           '<option value="' + Number(l.id) + '">' + e(l.subject_name) + ' · ' + e(l.module_title) + ' · ' + e(l.title) +
