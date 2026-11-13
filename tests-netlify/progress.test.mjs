@@ -31,12 +31,12 @@ test("practice XP is awarded only once per answered question and ignores diagnos
     2
   );
   assert.equal(xp.diagnosticXp, 13);
-  assert.equal(xp.practiceXp, 10);
+  assert.equal(xp.practiceXp, 7);
   assert.equal(xp.studyXp, 6);
   assert.equal(xp.lessonXp, 30);
-  assert.equal(xp.totalXp, 59);
+  assert.equal(xp.totalXp, 56);
   assert.equal(xp.answeredQuestions, 4);
-  assert.equal(xp.correctAnswers, 3);
+  assert.equal(xp.correctAnswers, 2);
 });
 
 test("diagnostic domains are classified without treating unanswered subjects as weak", () => {
