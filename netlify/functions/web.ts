@@ -174,6 +174,20 @@ export default async function handler(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const path = decodeURIComponent(url.pathname);
   const method = request.method.toUpperCase();
+
+  // Explicit lightweight probe before authentication or app DB queries.
+  if (path === "/api/health" && method === "GET") {
+    const databaseUrl = process.env.DATABASE_URL;
+    if (!databaseUrl) return Response.json({ ok: false, service: "infoconcours", status: "missing_database_configuration" }, { status: 503 });
+    try {
+      const probe = database();
+      await probe`SELECT 1 AS ok`;
+      return Response.json({ ok: true, service: "infoconcours", database: "connected" });
+    } catch {
+      return Response.json({ ok: false, service: "infoconcours", status: "database_unavailable" }, { status: 503 });
+    }
+  }
+
   try {
     const sql = database();
     const auth = await currentUser(request, sql);
