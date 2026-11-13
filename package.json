@@ -4,12 +4,12 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
+    "build": "node -e \"console.log('Netlify bundles the TypeScript functions during deployment.')\"",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests-netlify/*.test.mjs"
   },
   "dependencies": {
-    "@neondatabase/serverless": "^1.0.2",
+    "@neondatabase/serverless": "^1.2.0",
     "@netlify/functions": "^3.1.10",
     "nunjucks": "^3.2.4"
   },
@@ -17,5 +17,8 @@
     "@types/node": "^22.15.30",
     "@types/nunjucks": "^3.2.6",
     "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
