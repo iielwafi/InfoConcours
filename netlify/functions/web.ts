@@ -1107,36 +1107,50 @@ export default async function handler(request: Request): Promise<Response> {
         const action = val(form, "action") || "create";
         if (action === "import_curated") {
           let imported = 0, alreadyRegistered = 0, missingLessons = 0, linkedElsewhere = 0;
-          for (const video of CURATED_FRENCH_VIDEOS) {
-            const lessonRows = await sql`SELECT l.id,l.chapter_id,s.slug FROM curriculum_lesson l
+          const lessonTitles = CURATED_FRENCH_VIDEOS.map((video) => video.lessonTitle);
+          const videoIds = CURATED_FRENCH_VIDEOS.map((video) => video.videoId);
+          const [lessonRows, existingRows] = await Promise.all([
+            sql`SELECT l.id,l.title,l.chapter_id,s.slug FROM curriculum_lesson l
               JOIN curriculum_chapter c ON c.id=l.chapter_id
               JOIN curriculum_module m ON m.id=c.module_id
               JOIN curriculum_subject s ON s.id=m.subject_id
-              WHERE l.title=${video.lessonTitle} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE
-              ORDER BY l.id LIMIT 1`;
-            if (!lessonRows.length) { missingLessons++; continue; }
-            const lesson = lessonRows[0] as Row;
-            const existing = await sql`SELECT v.id,vm.lesson_id FROM video_resource v
-              LEFT JOIN video_metadata vm ON vm.video_id=v.id WHERE v.video_id=${video.videoId} LIMIT 1`;
-            if (existing.length) {
-              if (Number(existing[0].lesson_id || 0) === Number(lesson.id)) alreadyRegistered++;
+              WHERE l.title=ANY(${lessonTitles}::text[]) AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE
+              ORDER BY l.id`,
+            sql`SELECT v.video_id,vm.lesson_id FROM video_resource v
+              LEFT JOIN video_metadata vm ON vm.video_id=v.id WHERE v.video_id=ANY(${videoIds}::text[])`
+          ]);
+          const lessonByTitle = new Map((lessonRows as Row[]).map((lesson) => [String(lesson.title), lesson]));
+          const existingByVideoId = new Map((existingRows as Row[]).map((video) => [String(video.video_id), Number(video.lesson_id || 0)]));
+          const queue: Array<{ video: typeof CURATED_FRENCH_VIDEOS[number]; lesson: Row }> = [];
+          for (const video of CURATED_FRENCH_VIDEOS) {
+            const lesson = lessonByTitle.get(video.lessonTitle);
+            if (!lesson) { missingLessons++; continue; }
+            if (existingByVideoId.has(video.videoId)) {
+              if (existingByVideoId.get(video.videoId) === Number(lesson.id)) alreadyRegistered++;
               else linkedElsewhere++;
               continue;
             }
-            const inserted = await sql`INSERT INTO video_resource
-              (title,channel,video_id,language,lesson_key,duration_minutes,verified,verification_status,active,created_by,created_at)
-              VALUES (${video.title},${video.channel},${video.videoId},'Français',${lesson.slug},NULL,FALSE,'pending',TRUE,${user.id},NOW())
-              RETURNING id`;
-            const newVideoId = Number(inserted[0]?.id);
-            if (!newVideoId) throw new Error("curated_video_insert_failed");
-            try {
-              await sql`INSERT INTO video_metadata (video_id,description,chapter_id,lesson_id,thumbnail_url)
-                VALUES (${newVideoId},${video.description},${lesson.chapter_id},${lesson.id},NULL)`;
-            } catch (error) {
-              await sql`DELETE FROM video_resource WHERE id=${newVideoId}`;
-              throw error;
-            }
-            imported++;
+            queue.push({ video, lesson });
+          }
+          // Small batches keep the admin request responsive while avoiding an unbounded burst of DB calls.
+          for (let offset = 0; offset < queue.length; offset += 6) {
+            const batch = queue.slice(offset, offset + 6);
+            await Promise.all(batch.map(async ({ video, lesson }) => {
+              const inserted = await sql`INSERT INTO video_resource
+                (title,channel,video_id,language,lesson_key,duration_minutes,verified,verification_status,active,created_by,created_at)
+                VALUES (${video.title},${video.channel},${video.videoId},'Français',${lesson.slug},NULL,FALSE,'pending',TRUE,${user.id},NOW())
+                RETURNING id`;
+              const newVideoId = Number(inserted[0]?.id);
+              if (!newVideoId) throw new Error("curated_video_insert_failed");
+              try {
+                await sql`INSERT INTO video_metadata (video_id,description,chapter_id,lesson_id,thumbnail_url)
+                  VALUES (${newVideoId},${video.description},${lesson.chapter_id},${lesson.id},NULL)`;
+              } catch (error) {
+                await sql`DELETE FROM video_resource WHERE id=${newVideoId}`;
+                throw error;
+              }
+            }));
+            imported += batch.length;
           }
           const message = imported + " vidéo(s) française(s) ajoutée(s) en attente de vérification; " +
             alreadyRegistered + " déjà associée(s), " + linkedElsewhere + " déjà utilisées ailleurs, " +
