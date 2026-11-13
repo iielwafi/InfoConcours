@@ -740,7 +740,9 @@ export default async function handler(request: Request): Promise<Response> {
         const assessmentToken = signAssessment("exam", user.id, qs.map((q: Row) => Number(q.id)), started);
         const body = '<section class="section"><div class="section-head"><div class="eyebrow">EXAMEN BLANC</div><h2>Simulation de concours.</h2><p>30 questions · ' + Math.max(5, Math.min(240, Number(process.env.EXAM_DURATION_MINUTES ?? 240))) + ' minutes.</p></div>' +
           postForm("/exam", token, hidden("assessment_token", assessmentToken) + qs.map((q: Row) => questionBlock(q, token)).join("") + btn("Terminer l’examen")) + '</section>';
-        return pageResponse(request, user, session, "Examen blanc", body);
+        return pageResponse(request, user, session, "Examen blanc", body, 200, {
+          "set-cookie": "ic_exam_mode=1; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=21600",
+        });
       }
       const signed = readAssessment(val(form, "assessment_token"), "exam", user.id, 6 * 60 * 60 * 1000);
       if (!signed?.startedAt || Date.now() - signed.startedAt > 6 * 60 * 60 * 1000 || signed.startedAt > Date.now() + 60_000) return toNotice("/exam", "Cette session d’examen a expiré. Lance un nouvel examen.", "error");
@@ -751,8 +753,12 @@ export default async function handler(request: Request): Promise<Response> {
       const limit = Math.max(5, Math.min(240, Number(process.env.EXAM_DURATION_MINUTES ?? 240)));
       const details = qs.map((q) => detailsFor(q, elapsed <= limit ? (form.has("a" + q.id) ? val(form, "a" + q.id) : null) : null));
       const attempt = await recordAttempt(sql, user.id, "exam", details, Math.min(limit, elapsed));
-      const body = '<section class="section"><div class="section-head"><div class="eyebrow">RÉSULTAT DE L’EXAMEN BLANC</div><h2>' + e(attempt.score) + ' / ' + e(attempt.total) + '</h2><p>' + Math.round(Number(attempt.score) * 100 / Number(attempt.total)) + ' % · ' + e(attempt.duration_minutes) + ' min</p></div><div class="actions"><a class="btn primary" href="/exam">Nouvel examen</a><a class="btn ghost" href="/dashboard">Tableau de bord</a></div></section>';
-      return pageResponse(request, user, session, "Résultat de l’examen", body);
+      const body = '<section class="section"><div class="section-head"><div class="eyebrow">EXAMEN TERMINÉ · CORRECTION APRÈS SOUMISSION</div><h2>' + e(attempt.score) + ' / ' + e(attempt.total) + '</h2><p>' + Math.round(Number(attempt.score) * 100 / Number(attempt.total)) + ' % · ' + e(attempt.duration_minutes) + ' min</p><p>Le mode examen est terminé. Voici maintenant les corrections et explications.</p></div><div class="feature-grid">' +
+        details.map((d) => card(d.prompt, (d.ok ? "✓ Réponse correcte" : "✗ Réponse incorrecte") + "<br>Ta réponse : " + e(d.selected === null ? "Sans réponse" : d.options[d.selected]) + "<br>Bonne réponse : " + e(d.options[d.answer]) + "<br>" + e(d.explanation), d.domain)).join("") +
+        '</div><div class="actions"><a class="btn primary" href="/exam">Nouvel examen</a><a class="btn ghost" href="/dashboard">Tableau de bord</a></div></section>';
+      return pageResponse(request, user, session, "Résultat de l’examen", body, 200, {
+        "set-cookie": "ic_exam_mode=; Path=/; HttpOnly; SameSite=Strict; Secure; Max-Age=0",
+      });
     }
 
     if (path === "/study" && (method === "GET" || method === "POST")) {
