@@ -1119,10 +1119,10 @@ export default async function handler(request: Request): Promise<Response> {
           return redirect("/admin/videos");
         }
 
+        if (action !== "create" && action !== "edit") return response("<h1>400 · Action invalide</h1>", 400);
         const title = val(form, "title");
         const channel = val(form, "channel");
-        const raw = val(form, "url");
-        const youtubeId = extractYoutubeVideoId(raw);
+        const youtubeId = extractYoutubeVideoId(val(form, "url"));
         const lessonId = Number(form.get("lesson_id"));
         const language = val(form, "language") || "Français";
         const description = val(form, "description").slice(0, 4000);
@@ -1142,8 +1142,40 @@ export default async function handler(request: Request): Promise<Response> {
           JOIN curriculum_subject s ON s.id=m.subject_id
           WHERE l.id=${lessonId} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE LIMIT 1`;
         if (!lessonRows.length) return toNotice("/admin/videos", "Choisis une leçon publiée et valide.", "error");
-        const duplicate = await sql`SELECT id FROM video_resource WHERE video_id=${youtubeId} LIMIT 1`;
-        if (duplicate.length) return toNotice("/admin/videos", "Cette vidéo YouTube est déjà enregistrée. Modifie son association dans la liste.", "error");
+        const duplicate = await sql`SELECT id FROM video_resource WHERE video_id=${youtubeId} AND id<>${action === "edit" ? videoId : 0} LIMIT 1`;
+        if (duplicate.length) return toNotice("/admin/videos", "Cette vidéo YouTube est déjà enregistrée. Ouvre-la dans la liste pour modifier son association.", "error");
+
+        if (action === "edit") {
+          const previousRows = await sql`SELECT v.title,v.channel,v.video_id,v.language,v.lesson_key,v.duration_minutes,
+              vm.description,vm.lesson_id,vm.chapter_id,vm.thumbnail_url
+            FROM video_resource v LEFT JOIN video_metadata vm ON vm.video_id=v.id
+            WHERE v.id=${videoId} LIMIT 1`;
+          if (!previousRows.length) return toNotice("/admin/videos", "Vidéo introuvable.", "error");
+          const previous = previousRows[0] as Row;
+          const changed =
+            String(previous.title) !== title ||
+            String(previous.channel) !== channel ||
+            String(previous.video_id) !== youtubeId ||
+            String(previous.language) !== language ||
+            String(previous.lesson_key) !== String(lessonRows[0].slug) ||
+            Number(previous.duration_minutes || 0) !== Number(duration || 0) ||
+            String(previous.description || "") !== description ||
+            Number(previous.lesson_id || 0) !== lessonId ||
+            Number(previous.chapter_id || 0) !== Number(lessonRows[0].chapter_id) ||
+            String(previous.thumbnail_url || "") !== thumbnail;
+          await sql`UPDATE video_resource SET title=${title},channel=${channel},video_id=${youtubeId},language=${language},
+              lesson_key=${lessonRows[0].slug},duration_minutes=${duration},
+              verified=CASE WHEN ${changed} THEN FALSE ELSE verified END,
+              verification_status=CASE WHEN ${changed} THEN 'pending' ELSE verification_status END,
+              verified_at=CASE WHEN ${changed} THEN NULL ELSE verified_at END
+            WHERE id=${videoId}`;
+          await sql`INSERT INTO video_metadata (video_id,description,chapter_id,lesson_id,thumbnail_url)
+            VALUES (${videoId},${description},${lessonRows[0].chapter_id},${lessonId},${thumbnail || null})
+            ON CONFLICT (video_id) DO UPDATE SET description=EXCLUDED.description,chapter_id=EXCLUDED.chapter_id,
+              lesson_id=EXCLUDED.lesson_id,thumbnail_url=EXCLUDED.thumbnail_url`;
+          return toNotice("/admin/videos", changed ? "Vidéo mise à jour. Elle repasse en vérification avant publication." : "Vidéo mise à jour.");
+        }
+
         const inserted = await sql`INSERT INTO video_resource
           (title,channel,video_id,language,lesson_key,duration_minutes,verified,verification_status,active,created_by,created_at)
           VALUES (${title},${channel},${youtubeId},${language},${lessonRows[0].slug},${duration},FALSE,'pending',TRUE,${user.id},NOW())
@@ -1153,7 +1185,8 @@ export default async function handler(request: Request): Promise<Response> {
         try {
           await sql`INSERT INTO video_metadata (video_id,description,chapter_id,lesson_id,thumbnail_url)
             VALUES (${newVideoId},${description},${lessonRows[0].chapter_id},${lessonId},${thumbnail || null})
-            ON CONFLICT (video_id) DO UPDATE SET description=EXCLUDED.description,chapter_id=EXCLUDED.chapter_id,lesson_id=EXCLUDED.lesson_id,thumbnail_url=EXCLUDED.thumbnail_url`;
+            ON CONFLICT (video_id) DO UPDATE SET description=EXCLUDED.description,chapter_id=EXCLUDED.chapter_id,
+              lesson_id=EXCLUDED.lesson_id,thumbnail_url=EXCLUDED.thumbnail_url`;
         } catch (error) {
           await sql`DELETE FROM video_resource WHERE id=${newVideoId}`;
           throw error;
