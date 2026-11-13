@@ -134,6 +134,7 @@ export default async function handler(request: Request): Promise<Response> {
       const username = val(form, "username"), email = val(form, "email").toLowerCase();
       const password = String(form.get("password") ?? ""), confirm = String(form.get("confirm") ?? "");
       if (username.length < 3 || username.length > 40 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || password.length < 8 || password !== confirm) {
+        await authFailure(sql, registerKey);
         return toNotice("/register", "Vérifie les champs : nom (3 caractères), email valide et mot de passe de 8 caractères minimum.", "error");
       }
       const found = await sql`SELECT id FROM "user" WHERE username = ${username} OR email = ${email} LIMIT 1`;
