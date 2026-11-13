@@ -1,0 +1,24 @@
+{
+  "name": "infoconcours-netlify",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run typecheck && npm test",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests-netlify/*.test.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "@netlify/functions": "^3.1.10",
+    "nunjucks": "^3.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.30",
+    "@types/nunjucks": "^3.2.6",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

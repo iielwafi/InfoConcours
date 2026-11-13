@@ -1,0 +1,16 @@
+[build]
+  command = "npm run build"
+  publish = "public"
+  functions = "netlify/functions"
+
+[functions]
+  node_bundler = "esbuild"
+
+# Keep the existing Flask/Jinja static URLs working while templates are migrated.
+[[redirects]]
+  from = "/static/*"
+  to = "/assets/:splat"
+  status = 200
+
+# Function routes are declared with each function's exported config.path.
+# The application-wide rewrite stays disabled until Flask route parity is complete.
