@@ -1,11 +1,12 @@
 import type { Config } from "@netlify/functions";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { database } from "./_shared/database.ts";
-import { createSession, readSession, cookieHeader, expiredCookieHeader } from "./_shared/session.ts";
+import { createSession, readSession, cookieHeader, expiredCookieHeader, validCsrf } from "./_shared/session.ts";
 import {
-  currentUser, csrfForPage, csrfValid, escapeHtml, flashBox, page, redirect, response, withCookie,
+  currentUser, csrfForPage, csrfValid, escapeHtml, flashBox, getCookie, page, redirect, response, withCookie,
 } from "./_shared/http.ts";
 import { hashPassword, verifyPassword } from "./_shared/password.ts";
+import { askAiTeacher, explainWrongAnswer } from "./_shared/ai.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
@@ -139,10 +140,10 @@ async function clearAuthFailure(sql: any, keys: string[]): Promise<void> {
 }
 
 
-async function pageResponse(request: Request, user: any, session: any, title: string, body: string, status = 200): Promise<Response> {
+async function pageResponse(request: Request, user: any, session: any, title: string, body: string, status = 200, extraHeaders: Record<string, string> = {}): Promise<Response> {
   const csrf = csrfForPage(request, session);
-  const res = response(page(user, title, safeNotice(new URL(request.url)) + body, csrf.token), status, csrf.cookie ? { "set-cookie": csrf.cookie } : {});
-  return res;
+  const headers: Record<string, string> = { ...(csrf.cookie ? { "set-cookie": csrf.cookie } : {}), ...extraHeaders };
+  return response(page(user, title, safeNotice(new URL(request.url)) + body, csrf.token), status, headers);
 }
 async function requirePostCsrf(request: Request, form: FormData, session: any): Promise<boolean> {
   return csrfValid(request, form, session);
@@ -200,6 +201,83 @@ export default async function handler(request: Request): Promise<Response> {
     const auth = await currentUser(request, sql);
     const user = auth.user;
     const session = auth.session;
+
+    if (path === "/api/tutor" && method === "POST") {
+      if (!user || !session) return Response.json({ ok: false, message: "Connecte-toi pour parler au professeur IA." }, { status: 401 });
+      if (getCookie(request, "ic_exam_mode") === "1") {
+        return Response.json({ ok: false, message: "Le professeur IA est désactivé pendant un examen. Termine l'examen pour retrouver l'aide." }, { status: 403 });
+      }
+      const csrfHeader = request.headers.get("x-csrftoken") ?? request.headers.get("x-csrf-token") ?? "";
+      if (!validCsrf(session, csrfHeader)) return Response.json({ ok: false, message: "Session expirée. Recharge la page puis réessaie." }, { status: 419 });
+
+      const body = await request.json().catch(() => null) as Row | null;
+      if (!body || !Array.isArray(body.messages) || body.messages.length > 12) {
+        return Response.json({ ok: false, message: "Conversation invalide." }, { status: 400 });
+      }
+      const messages = body.messages
+        .filter((item: Row) => item && (item.role === "user" || item.role === "assistant") && typeof item.content === "string")
+        .map((item: Row) => ({ role: item.role as "user" | "assistant", content: String(item.content).slice(0, 3000) }));
+      if (!messages.length || messages[messages.length - 1].role !== "user" || !messages[messages.length - 1].content.trim()) {
+        return Response.json({ ok: false, message: "Écris d'abord ta question." }, { status: 400 });
+      }
+
+      const tutorKey = authHash("ai-tutor", String(user.id));
+      if (await authBlocked(sql, tutorKey)) {
+        return Response.json({ ok: false, message: "Tu as atteint la limite temporaire de questions. Réessaie dans quelques minutes." }, { status: 429 });
+      }
+      await authFailure(sql, tutorKey);
+
+      const contextParts: string[] = [];
+      const lessonId = Number(body.lesson_id) || 0;
+      const exerciseId = Number(body.exercise_id) || 0;
+      const questionId = Number(body.question_id) || 0;
+
+      if (lessonId > 0) {
+        const lessons = await sql`SELECT l.id,l.title,l.objectives_fr,l.prerequisites_fr,l.theory_fr,l.theory_ar,l.example_fr,l.code_example,l.summary_fr,l.revision_fr,s.name AS subject_name,m.title AS module_title,c.title AS chapter_title
+          FROM curriculum_lesson l JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id JOIN curriculum_subject s ON s.id=m.subject_id
+          WHERE l.id=${lessonId} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE LIMIT 1`;
+        if (lessons.length) {
+          const l = lessons[0] as Row;
+          contextParts.push(["LEÇON", l.subject_name, l.module_title, l.chapter_title, l.title, "OBJECTIFS: " + l.objectives_fr, "PRÉREQUIS: " + l.prerequisites_fr, "COURS FR: " + l.theory_fr, "COURS AR: " + l.theory_ar, "EXEMPLE: " + l.example_fr, "CODE: " + l.code_example, "RÉSUMÉ: " + l.summary_fr, "RÉVISION: " + l.revision_fr].join("\n\n"));
+        }
+      }
+
+      if (exerciseId > 0) {
+        const exercises = await sql`SELECT x.id,x.title,x.prompt_fr,x.prompt_ar,x.solution_fr,x.solution_ar,x.exercise_type,x.options_json,x.correct_answer,x.accepted_answers_json,x.feedback_fr,x.grading_guide_fr,x.learning_objective_fr,x.level,l.title AS lesson_title
+          FROM course_exercise x JOIN curriculum_lesson l ON l.id=x.lesson_id
+          WHERE x.id=${exerciseId} AND x.published=TRUE AND l.published=TRUE LIMIT 1`;
+        if (exercises.length) {
+          const x = exercises[0] as Row;
+          const attempts = await sql`SELECT submitted_answer,score,feedback,status FROM exercise_attempt WHERE exercise_id=${exerciseId} AND user_id=${user.id} ORDER BY created_at DESC LIMIT 1`;
+          const last = attempts[0] as Row | undefined;
+          contextParts.push(["EXERCICE", x.lesson_title, x.title, "ÉNONCÉ: " + x.prompt_fr, "ÉNONCÉ AR: " + x.prompt_ar, "TYPE: " + x.exercise_type, "OPTIONS: " + x.options_json, "SOLUTION: " + x.solution_fr, "SOLUTION AR: " + x.solution_ar, "BARÈME: " + x.grading_guide_fr, "OBJECTIF: " + x.learning_objective_fr, last ? "DERNIÈRE RÉPONSE DE L'ÉTUDIANT: " + last.submitted_answer : ""].filter(Boolean).join("\n\n"));
+        }
+      }
+
+      if (questionId > 0) {
+        const questions = await sql`SELECT id,domain,topic,level,prompt_fr,prompt_ar,options_fr,options_ar,answer,explanation_fr,explanation_ar FROM question WHERE id=${questionId} AND active=TRUE LIMIT 1`;
+        if (questions.length) {
+          const q = questions[0] as Row;
+          const options = parseJson(q.options_fr, []);
+          contextParts.push(["QUESTION", q.domain, q.topic, q.level, q.prompt_fr, "OPTIONS: " + options.map((option: string, index: number) => index + ". " + option).join(" | "), "RÉPONSE CORRECTE: " + options[Number(q.answer)], "EXPLICATION: " + q.explanation_fr, "EXPLICATION AR: " + q.explanation_ar].join("\n"));
+        }
+      }
+
+      if (!process.env.OPENAI_API_KEY?.trim()) {
+        return Response.json({ ok: false, message: "Le professeur IA n'est pas encore activé. L'administrateur doit ajouter OPENAI_API_KEY dans Netlify." }, { status: 503 });
+      }
+      try {
+        const answer = await askAiTeacher({ messages, curriculumContext: contextParts.join("\n\n---\n\n") });
+        return Response.json({ ok: true, answer });
+      } catch (error) {
+        console.error("InfoConcours AI tutor error:", error instanceof Error ? error.message : "unknown");
+        const message = error instanceof Error && error.message === "ai_rate_limited"
+          ? "Le service IA reçoit trop de demandes pour le moment. Réessaie dans un instant."
+          : "Le professeur IA est momentanément indisponible. Réessaie dans quelques instants.";
+        return Response.json({ ok: false, message }, { status: 503 });
+      }
+    }
+
     const form = method === "POST" ? await request.formData() : new FormData();
     if (method === "POST" && !await requirePostCsrf(request, form, session)) {
       return response("<h1>419 · Formulaire expiré</h1><p>Recharge la page et réessaie.</p>", 419);
@@ -275,6 +353,27 @@ export default async function handler(request: Request): Promise<Response> {
     }
 
     if (!user) return authRequired(url);
+
+    if (path === "/tutor" && method === "GET") {
+      if (getCookie(request, "ic_exam_mode") === "1") return redirect("/exam?notice=" + encodeURIComponent("Le professeur IA est désactivé pendant l'examen."));
+      const lessonId = Number(url.searchParams.get("lesson_id")) || 0;
+      const exerciseId = Number(url.searchParams.get("exercise_id")) || 0;
+      const questionId = Number(url.searchParams.get("question_id")) || 0;
+      let contextTitle = "Espace de discussion";
+      if (lessonId > 0) {
+        const rows = await sql`SELECT l.title,s.name AS subject_name FROM curriculum_lesson l JOIN curriculum_chapter c ON c.id=l.chapter_id JOIN curriculum_module m ON m.id=c.module_id JOIN curriculum_subject s ON s.id=m.subject_id WHERE l.id=${lessonId} AND l.published=TRUE AND c.published=TRUE AND m.published=TRUE AND s.published=TRUE LIMIT 1`;
+        if (rows.length) contextTitle = String(rows[0].subject_name) + " · " + String(rows[0].title);
+      }
+      const csrf = csrfForPage(request, session).token;
+      const body = '<section class="ai-tutor-shell" data-ai-tutor data-lesson-id="' + lessonId + '" data-exercise-id="' + exerciseId + '" data-question-id="' + questionId + '">' +
+        '<div class="ai-tutor-heading"><div><span class="ai-tutor-badge">✦ PROFESSEUR IA</span><h1>Ton professeur est disponible.</h1><p class="muted">' + e(contextTitle) + ' · Pose une question, partage ta réponse ou demande une autre explication.</p></div><a class="btn ghost" href="' + (lessonId ? "/courses/continue" : "/dashboard") + '">Retour</a></div>' +
+        '<div class="ai-tutor-panel"><div class="ai-tutor-top"><div class="ai-tutor-avatar">✦</div><div><strong>Professeur IA INFOCONCOURS</strong><small>Explique · Corrige · Entraîne</small></div></div>' +
+        '<div class="ai-tutor-messages" data-tutor-messages aria-live="polite"></div>' +
+        '<div class="ai-tutor-prompts"><button type="button" data-tutor-prompt="Explique-moi cette notion simplement avec un exemple.">Explique-moi ce cours</button><button type="button" data-tutor-prompt="Voici ma réponse. Dis-moi si elle est correcte et explique mon erreur si nécessaire.">Corrige ma réponse</button><button type="button" data-tutor-prompt="Donne-moi un exercice similaire pour vérifier que j'ai compris.">Donne-moi un exercice</button></div>' +
+        '<form class="ai-tutor-form" data-tutor-form><textarea data-tutor-input name="message" rows="2" maxlength="3000" placeholder="Écris ta question ici…" required></textarea><button class="btn primary" type="submit" data-tutor-send>Envoyer</button></form><div class="ai-tutor-status" data-tutor-status role="status"></div></div>' +
+        '<p class="muted">En entraînement, le professeur peut corriger et expliquer tes erreurs. Pendant un examen, son aide est désactivée jusqu’à la fin.</p></section>';
+      return pageResponse(request, user, session, "Professeur IA", body);
+    }
 
     if (path === "/profile" && (method === "GET" || method === "POST")) {
       if (method === "POST") {
