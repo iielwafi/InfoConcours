@@ -2,33 +2,41 @@
 
 ## Current state
 
-- Work remains isolated on `migration/netlify-typescript`; production `main` has not been merged or changed.
-- The previous Preview passed the read-only Neon health check: `DATABASE_URL` connected and `SECRET_KEY` was configured.
-- A live browser check confirmed that the public Preview homepage, header, hero, navigation, login page, CSS, and JavaScript assets render.
-- The new AI Professor implementation is now on this branch and requires a fresh Deploy Preview build before it can be tested.
-- Environment variable `OPENAI_API_KEY` has **not yet been confirmed** in Netlify. Without it, AI chat and semantic grading return a clear configuration message; deterministic QCM marking still works.
-- The current default AI model is `gpt-6-luna`; it can be overridden through `AI_TUTOR_MODEL`. Open-response grading can use `EXERCISE_GRADING_MODEL` or inherit `AI_TUTOR_MODEL`.
+- All migration work remains isolated on `migration/netlify-typescript`; production `main` has not been merged or changed.
+- Netlify Deploy Preview has previously passed a live build and a read-only Neon health check (`DATABASE_URL` connected; `SECRET_KEY` configured). A new preview is triggered for each branch commit; verify the latest status before relying on it.
+- The public preview homepage and login page have been loaded successfully. The health endpoint returned HTTP 200 with Neon connected.
+- Netlify has `DATABASE_URL` and `SECRET_KEY` configured for Production, Deploy Previews, and Branch deploys. `GEMINI_API_KEY` is not yet configured; it must be added before AI requests can reach Gemini.
+- Gemini is the preferred AI provider. The default model is `gemini-3.8-flash` using the Gemini Developer API `generateContent` endpoint. `OPENAI_API_KEY` remains an optional paid fallback only when Gemini is not configured.
+- Gemini Free Tier has usage limits and Google may use prompts for product improvement. The tutor page displays a privacy notice; students should not submit personal or confidential information.
 
 ## AI Professor rules implemented
 
-- Added a protected `/tutor` chat page and `POST /api/tutor` endpoint using the OpenAI Responses API.
+- Added protected `/tutor` chat page and authenticated `POST /api/tutor` endpoint.
 - Chat context can include the current lesson, exercise, latest student submission, or question with its explanation.
-- The tutor responds in the student's language (French, Arabic, or Moroccan Darija), explains errors, shows reasoning, and can give a short check-for-understanding exercise.
-- Added a persistent navigation link and a lesson-specific entry point. Incorrect exercise and QCM answers link directly to the tutor with their context.
-- Training QCM results now show correctness, the student's answer, the correct answer, the explanation, and an AI follow-up link for mistakes.
-- Open-answer exercises are graded by AI when confidence is sufficient. If AI is unsure or unavailable, the attempt is marked `ai_retry`; the student is asked to clarify/retry. New attempts are no longer sent to a human teacher queue.
-- Deterministic QCM / true-false / short-answer checks still calculate the score locally; AI produces a personalized explanation for wrong answers when the API key is configured.
+- The tutor responds in French, Arabic, or Moroccan Darija; explains errors step by step and can give a short check-for-understanding exercise.
+- Added a lesson-specific entry point and AI follow-up links from exercise/QCM corrections.
+- Training QCM results show correctness, the student's answer, the correct answer, and the stored explanation.
+- Deterministic QCM / true-false / short-answer checks calculate correctness locally. The AI provider may add a personalized explanation for wrong answers.
+- Open-answer exercises use structured AI grading. A confident result is saved as AI-graded; a low-confidence result or provider failure is marked `ai_retry` so the learner can refine and resubmit. No new attempt is sent to a human correction queue.
+- The old admin route `/admin/exercise-attempts` has been removed from the Netlify app and route contract. Historical attempts marked `pending_manual` or `manually_graded` remain visible as historical records; pending attempts can be continued with the AI tutor.
 
 ## Exam protection
 
 - Starting an exam sets an HttpOnly, Secure, SameSite=Strict exam-mode cookie.
-- The tutor page is hidden during the active exam, and the tutor API rejects requests while the exam-mode cookie is present.
+- The tutor page is hidden during an active exam, and the tutor API rejects requests while the exam-mode cookie is present.
 - The exam-mode cookie expires after submission. The exam page itself does not display answers or hints. Results and explanations appear only after the student submits the exam.
+
+## Build and tests
+
+- `npm run build` now runs `npm run typecheck` and the Node test suite before Netlify bundles the function.
+- `tests-netlify/ai.test.mjs` verifies Gemini provider selection and JSON-mode requests without calling a paid API.
+- Route tests verify the AI tutor endpoints and absence of the old human correction route.
+- No live Gemini API call has been verified yet because `GEMINI_API_KEY` is not configured.
 
 ## Runtime and data safety
 
 - Neon PostgreSQL remains the database. No schema migration, data transfer, seed, or destructive production DB write has been run as part of this runtime migration.
-- Never commit `DATABASE_URL`, `SECRET_KEY`, or `OPENAI_API_KEY`.
+- Never commit `DATABASE_URL`, `SECRET_KEY`, `GEMINI_API_KEY`, or `OPENAI_API_KEY`.
 - Existing Flask files, Alembic migrations, templates, and original assets remain available for rollback and comparison.
 - Existing Werkzeug scrypt and PBKDF2 password hashes remain supported.
 - Assessment question sets are signed and user-bound; POST and AI requests are protected by CSRF checks.
@@ -36,11 +44,11 @@
 
 ## Still required before production
 
-- Add `OPENAI_API_KEY` in Netlify as a secret with Functions scope for Production and Deploy Previews.
-- Confirm the latest branch build passes Netlify function bundling.
-- Verify AI chat and wrong-answer explanation using a real API key and a test student account.
-- Exercise registration/login/logout, student/admin access, course progress, QCM/exams, grading, bookmarks, videos and admin edits against a staging/test database.
-- Complete remaining one-to-one parity checks against original Flask/Jinja behavior.
+- Add a Gemini API key from Google AI Studio as `GEMINI_API_KEY` in Netlify with Functions scope for Deploy Previews and Production. Use the Free Tier project; do not enable paid billing just to test this stage.
+- Verify the latest Deploy Preview build after typecheck/test integration.
+- Verify AI chat and wrong-answer explanation with a real Gemini key and a test student account.
+- Exercise registration/login/logout, student/admin access, course progress, QCM/exams, grading, bookmarks, videos, and admin edits against a staging/test database.
+- Complete remaining one-to-one parity checks against original Flask behavior.
 - Confirm the Production domain before merging.
 
 ## Deploy gate
