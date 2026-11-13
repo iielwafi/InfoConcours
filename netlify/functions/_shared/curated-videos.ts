@@ -147,10 +147,10 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
   },
   {
     lessonTitle: "Suivre la résolution d’un nom et une requête Web",
-    title: "DNS et DHCP expliqués simplement",
-    channel: "phytosportnutri",
-    videoId: "Y8KP7vFnoeM",
-    description: "Résolution des noms de domaine par DNS, attribution automatique des paramètres réseau par DHCP et processus DORA."
+    title: "Introduction à la gestion DHCP et DNS",
+    channel: "WEWANTCODE",
+    videoId: "r-s_oKc_cQU",
+    description: "Introduction aux rôles du DNS et du DHCP dans un réseau et à leur utilisation pour gérer les postes clients."
   },
   {
     lessonTitle: "Suivre une instruction dans le processeur",
