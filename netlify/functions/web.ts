@@ -10,6 +10,7 @@ import { askAiTeacher, explainWrongAnswer, generateAiJson, hasAiProviderConfigur
 import { extractYoutubeVideoId, validHttpsThumbnail } from "./_shared/video.ts";
 import { CURATED_FRENCH_VIDEOS, MISSING_FRENCH_VIDEO_LESSONS } from "./_shared/curated-videos.ts";
 import { summarizeAttemptDetails } from "./_shared/planner.ts";
+import { calculateXpSnapshot, buildPerformanceTimeline, summarizeDiagnosticDomains } from "./_shared/progress.ts";
 
 type Row = Record<string, any>;
 const e = escapeHtml;
@@ -330,7 +331,7 @@ export default async function handler(request: Request): Promise<Response> {
       await clearAuthFailure(sql, [registerKey]);
       const token = createSession({ userId: Number(created.id), role: "student", language: "fr" });
       await sql`INSERT INTO user_preference (user_id,language) VALUES (${Number(created.id)},${"fr"}) ON CONFLICT (user_id) DO NOTHING`;
-      return redirect("/dashboard", { "set-cookie": cookieHeader(token, cookieSecure()) });
+      return redirect("/diagnostic?welcome=1", { "set-cookie": cookieHeader(token, cookieSecure()) });
     }
 
     if (path === "/login" && method === "POST") {
@@ -349,7 +350,8 @@ export default async function handler(request: Request): Promise<Response> {
       await clearAuthFailure(sql, [userKey, ipKey]);
       const pref = await sql`SELECT language FROM user_preference WHERE user_id = ${Number(found.id)} LIMIT 1`;
       const token = createSession({ userId: Number(found.id), role: found.role === "admin" ? "admin" : "student", language: pref[0]?.language === "ar" ? "ar" : "fr" });
-      return redirect("/dashboard", { "set-cookie": cookieHeader(token, cookieSecure()) });
+      const hasDiagnostic = found.role === "admin" ? [{ id: 1 }] : await sql`SELECT id FROM diagnostic WHERE user_id = ${Number(found.id)} LIMIT 1`;
+      return redirect(found.role !== "admin" && !hasDiagnostic.length ? "/diagnostic?welcome=1" : "/dashboard", { "set-cookie": cookieHeader(token, cookieSecure()) });
     }
 
     if (path === "/logout" && method === "POST") {
@@ -412,25 +414,76 @@ export default async function handler(request: Request): Promise<Response> {
     }
 
     if (path === "/dashboard" && method === "GET") {
-      const [latest, today, goal, attempts, totals, lessons] = await Promise.all([
+      const [latest, today, goal, recentAttempts, totals, lessons, diagnostics, allAttempts, studyTotal, studyDays] = await Promise.all([
         sql`SELECT id,total,created_at,scores FROM diagnostic WHERE user_id = ${user.id} ORDER BY created_at DESC LIMIT 1`,
         sql`SELECT COALESCE(SUM(minutes),0) AS minutes FROM study_session WHERE user_id = ${user.id} AND studied_on = CURRENT_DATE`,
         sql`SELECT daily_minutes FROM study_goal WHERE user_id = ${user.id} LIMIT 1`,
         sql`SELECT id,mode,score,total,created_at,duration_minutes FROM attempt WHERE user_id = ${user.id} ORDER BY created_at DESC LIMIT 8`,
         sql`SELECT COUNT(*) AS attempts, COALESCE(AVG(score*100.0/NULLIF(total,0)),0) AS average FROM attempt WHERE user_id = ${user.id} AND mode = 'qcm'`,
         sql`SELECT (SELECT COUNT(*) FROM curriculum_lesson WHERE published=TRUE) AS published, (SELECT COUNT(*) FROM lesson_completion WHERE user_id = ${user.id}) AS completed`,
+        sql`SELECT scores,created_at FROM diagnostic WHERE user_id = ${user.id} ORDER BY created_at ASC`,
+        sql`SELECT mode,score,total,created_at,details FROM attempt WHERE user_id = ${user.id} ORDER BY created_at ASC LIMIT 3000`,
+        sql`SELECT COALESCE(SUM(minutes),0) AS minutes FROM study_session WHERE user_id = ${user.id}`,
+        sql`SELECT TO_CHAR(days.day,'YYYY-MM-DD') AS day,COALESCE(SUM(ss.minutes),0)::int AS minutes
+          FROM generate_series(CURRENT_DATE - INTERVAL '6 days',CURRENT_DATE,INTERVAL '1 day') AS days(day)
+          LEFT JOIN study_session ss ON ss.studied_on=days.day::date AND ss.user_id=${user.id}
+          GROUP BY days.day ORDER BY days.day`,
       ]);
-      const mins = Number(today[0]?.minutes ?? 0), dailyGoal = goal[0]?.daily_minutes ? Number(goal[0].daily_minutes) : null;
-      const body = '<section class="section"><div class="section-head"><div class="eyebrow">TON ESPACE PERSONNEL</div><h2>Bonjour, ' + e(user.username) + ' 👋</h2><p>Voici ton évolution sur InfoConcours.</p></div><div class="feature-grid">' +
+
+      const mins = Number(today[0]?.minutes ?? 0);
+      const dailyGoal = goal[0]?.daily_minutes ? Number(goal[0].daily_minutes) : 60;
+      const xp = calculateXpSnapshot(diagnostics as Row[], allAttempts as Row[], Number(studyTotal[0]?.minutes ?? 0), Number(lessons[0]?.completed ?? 0));
+      const timeline = buildPerformanceTimeline(allAttempts as Row[], diagnostics as Row[], 14);
+      const domainScores = latest.length ? summarizeDiagnosticDomains(latest[0].scores) : [];
+      const measuredDomains = domainScores.filter((entry) => entry.percent !== null);
+      const skillLabels = measuredDomains.map((entry) => entry.domain);
+      const skillValues = measuredDomains.map((entry) => Number(entry.percent));
+      const workLabels = (studyDays as Row[]).map((entry) => String(entry.day).slice(8,10) + "/" + String(entry.day).slice(5,7));
+      const workHours = (studyDays as Row[]).map((entry) => Math.round(Number(entry.minutes ?? 0) / 60 * 10) / 10);
+      const progressLabels = timeline.map((entry) => entry.label);
+      const progressValues = timeline.map((entry) => entry.average);
+      const xpPercent = Math.round(xp.levelProgress / 250 * 100);
+      const priorityCount = domainScores.filter((entry) => entry.category === "priority").length;
+      const strengthCount = domainScores.filter((entry) => entry.category === "strength").length;
+
+      const xpPanel = '<article class="panel xp-panel"><div class="xp-panel-top"><span class="eyebrow">TON PARCOURS · XP</span><span class="xp-level-chip">NIVEAU ' + xp.level + '</span></div>' +
+        '<div class="xp-total"><strong>' + xp.totalXp + '</strong><span>XP</span></div>' +
+        '<div class="xp-progress-track"><span style="width:' + xpPercent + '%"></span></div>' +
+        '<div class="xp-progress-meta"><span>' + xp.levelProgress + ' / 250 XP</span><span>Encore ' + xp.xpForNextLevel + ' XP pour le niveau suivant</span></div>' +
+        '<div class="xp-breakdown"><span>Diagnostic <b>+' + xp.diagnosticXp + '</b></span><span>Entraînement <b>+' + xp.practiceXp + '</b></span><span>Étude <b>+' + xp.studyXp + '</b></span><span>Leçons <b>+' + xp.lessonXp + '</b></span></div>' +
+        '<small class="muted">Les XP sont calculés à partir de tes activités réelles. Une même question ne rapporte des points qu’une seule fois.</small></article>';
+
+      const skillChart = measuredDomains.length
+        ? '<article class="panel dashboard-chart-card"><div class="eyebrow">TON PROFIL DE COMPÉTENCES</div><h3>Résultat par matière</h3><p class="muted">Ton premier diagnostic sert de point de départ. Les matières non évaluées ne sont pas affichées comme des zéros.</p>' +
+          '<canvas class="progress-canvas radar-canvas" data-progress-chart="radar" data-labels="' + e(JSON.stringify(skillLabels)) + '" data-values="' + e(JSON.stringify(skillValues)) + '" aria-label="Graphique radar des compétences par matière"></canvas>' +
+          '<div class="skill-chart-legend"><span>' + strengthCount + ' point(s) fort(s)</span><span>' + priorityCount + ' priorité(s) à travailler</span></div></article>'
+        : '<article class="panel dashboard-chart-card"><div class="eyebrow">TON PROFIL DE COMPÉTENCES</div><h3>Découvre ton niveau de départ</h3><p class="muted">Passe le diagnostic initial pour afficher tes résultats par matière et suivre tes progrès.</p><a class="btn primary" href="/diagnostic">Commencer le diagnostic</a></article>';
+
+      const performanceChart = progressValues.length
+        ? '<article class="panel dashboard-chart-card"><div class="eyebrow">PROGRESSION</div><h3>Évolution de tes résultats</h3><p class="muted">Moyenne des diagnostics et évaluations enregistrées sur les 14 derniers jours.</p>' +
+          '<canvas class="progress-canvas line-canvas" data-progress-chart="line" data-labels="' + e(JSON.stringify(progressLabels)) + '" data-values="' + e(JSON.stringify(progressValues)) + '" aria-label="Courbe d’évolution des résultats en pourcentage"></canvas></article>'
+        : '<article class="panel dashboard-chart-card"><div class="eyebrow">PROGRESSION</div><h3>Ton évolution apparaîtra ici</h3><p class="muted">Après ton diagnostic et tes prochains QCM, tu verras tes résultats évoluer au fil du temps.</p><a class="btn ghost-light" href="/qcm">Faire un QCM</a></article>';
+
+      const studyChart = '<article class="panel dashboard-chart-card"><div class="eyebrow">RÉGULARITÉ</div><h3>Heures de travail · 7 derniers jours</h3><p class="muted">Seul le temps de concentration enregistré est compté. Les pauses ne sont pas incluses.</p>' +
+        '<canvas class="progress-canvas work-canvas" data-progress-chart="columns" data-labels="' + e(JSON.stringify(workLabels)) + '" data-values="' + e(JSON.stringify(workHours)) + '" aria-label="Graphique des heures de travail par jour"></canvas>' +
+        '<div class="study-chart-total">Aujourd’hui : <strong>' + (Math.round(mins / 60 * 10) / 10).toFixed(1) + ' h</strong> · Objectif : <strong>' + (Math.round(dailyGoal / 60 * 10) / 10).toFixed(1) + ' h</strong></div></article>';
+
+      const recentTable = '<section class="section"><div class="section-head"><h2>Activité récente</h2></div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Score</th><th>Date</th></tr></thead><tbody>' +
+        (recentAttempts as Row[]).map((a) => '<tr><td>' + e(a.mode) + '</td><td>' + e(a.score) + ' / ' + e(a.total) + '</td><td>' + e(formatDate(a.created_at)) + '</td></tr>').join("") +
+        '</tbody></table></div></section>';
+
+      const body = '<section class="section dashboard-welcome"><div class="section-head"><div class="eyebrow">TON ESPACE PERSONNEL</div><h2>Bonjour, ' + e(user.username) + ' 👋</h2><p>Voici tes compétences, tes efforts et ton évolution sur InfoConcours.</p></div><div class="feature-grid">' +
         card("Temps étudié aujourd’hui", mins + " minutes", "SUIVI") +
-        card("Objectif quotidien", dailyGoal ? dailyGoal + " minutes · " + Math.min(100, Math.round(mins * 100 / dailyGoal)) + " %" : "Non défini", "OBJECTIF") +
+        card("Objectif quotidien", dailyGoal + " minutes · " + Math.min(100, Math.round(mins * 100 / dailyGoal)) + " %", "OBJECTIF") +
         card("QCM réalisés", String(totals[0]?.attempts ?? 0), "ENTRAÎNEMENT") +
         card("Moyenne QCM", Math.round(Number(totals[0]?.average ?? 0)) + " %", "PROGRESSION") +
         card("Leçons terminées", Number(lessons[0]?.completed ?? 0) + " / " + Number(lessons[0]?.published ?? 0), "ACADÉMIE") +
-        card("Dernier diagnostic", latest[0] ? formatDate(latest[0].created_at) + " · " + e(latest[0].total) + " bonnes réponses" : "Pas encore réalisé", "DIAGNOSTIC") +
-        '</div><div class="actions"><a class="btn primary" href="/diagnostic">Faire mon diagnostic</a><a class="btn ghost" href="/courses">Voir les cours</a><a class="btn ghost" href="/study">Enregistrer une séance</a></div></section>' +
-        '<section class="section"><div class="section-head"><h2>Activité récente</h2></div><div class="table-wrap"><table><thead><tr><th>Type</th><th>Score</th><th>Date</th></tr></thead><tbody>' +
-        attempts.map((a: Row) => '<tr><td>' + e(a.mode) + '</td><td>' + e(a.score) + ' / ' + e(a.total) + '</td><td>' + e(formatDate(a.created_at)) + '</td></tr>').join("") + '</tbody></table></div></section>';
+        card("Réponses évaluées", String(xp.answeredQuestions) + " · " + String(xp.correctAnswers) + " correctes", "COMPÉTENCES") +
+        '</div>' + xpPanel +
+        '<div class="actions"><a class="btn primary" href="/planner">Planifier ma révision</a><a class="btn ghost" href="/courses">Voir les cours</a><a class="btn ghost" href="/study">Temps d’étude</a>' +
+        (latest.length ? '<a class="btn ghost" href="/diagnostic/' + Number(latest[0].id) + '">Voir mon diagnostic</a>' : '<a class="btn ghost" href="/diagnostic">Faire le diagnostic</a>') +
+        '</div></section>' +
+        '<section class="section dashboard-analytics"><div class="section-head"><div class="eyebrow">MES DONNÉES</div><h2>Mon progrès en un coup d’œil</h2><p>Des indicateurs calculés à partir de tes diagnostics, de tes QCM et de tes séances de travail.</p></div><div class="dashboard-chart-grid">' + skillChart + performanceChart + studyChart + '</div></section>' + recentTable;
       return pageResponse(request, user, session, "Vue d’ensemble", body);
     }
 
@@ -442,10 +495,15 @@ export default async function handler(request: Request): Promise<Response> {
           const rows = await sql`SELECT id, domain, topic, level, prompt_fr, prompt_ar, options_fr, options_ar, answer, explanation_fr, explanation_ar FROM question WHERE active=TRUE AND domain=${String(d.name)} ORDER BY random() LIMIT 3`;
           selected.push(...rows as Row[]);
         }
+        if (!selected.length) {
+          const emptyBody = section("Diagnostic momentanément indisponible", "<p>Aucune question active n’est disponible pour le moment. Tu peux consulter les cours pendant que le contenu est préparé.</p><a class=\"btn primary\" href=\"/courses\">Voir les cours</a>");
+          return pageResponse(request, user, session, "Diagnostic", emptyBody, 503);
+        }
         const token = csrfForPage(request, session).token;
-        const body = '<section class="section"><div class="section-head"><div class="eyebrow">DIAGNOSTIC INITIAL</div><h2>Évalue ton niveau.</h2><p>Trois questions par domaine. Les résultats seront enregistrés dans ton compte.</p></div>' +
-          postForm("/diagnostic", token, hidden("assessment_token", signAssessment("diagnostic", user.id, selected.map(q => Number(q.id)))) + selected.map(q => questionBlock(q, token)).join("") + btn("Terminer le diagnostic")) + '</section>';
-        return pageResponse(request, user, session, "Diagnostic", body);
+        const isWelcome = url.searchParams.get("welcome") === "1";
+        const body = '<section class="section diagnostic-intro"><div class="eyebrow">TON POINT DE DÉPART · 8 DOMAINES</div><h1>' + (isWelcome ? 'Bienvenue sur InfoConcours, ' + e(user.username) + ' !' : 'Évalue ton niveau.') + '</h1><p class="muted">Réponds aux questions pour découvrir tes points forts et les notions à travailler. Ce diagnostic est une première photographie de ton niveau, pas un jugement définitif.</p><div class="diagnostic-meta"><span>Jusqu’à ' + selected.length + ' questions</span><span>3 questions par matière</span><span>XP à gagner</span></div>' +
+          postForm("/diagnostic", token, hidden("assessment_token", signAssessment("diagnostic", user.id, selected.map(q => Number(q.id)))) + selected.map((q: Row) => questionBlock(q, token)).join("") + btn("Terminer mon diagnostic et gagner mes XP")) + '</section>';
+        return pageResponse(request, user, session, "Diagnostic initial", body);
       }
       const signed = readAssessment(val(form, "assessment_token"), "diagnostic", user.id);
       if (!signed) return toNotice("/diagnostic", "Ce diagnostic a expiré. Relance une nouvelle série.", "error");
@@ -460,6 +518,8 @@ export default async function handler(request: Request): Promise<Response> {
         total += correct;
         scores[String(d.name)] = { correct, count: answered.length, available: group.length, percent: answered.length ? Math.round(correct * 100 / answered.length) : 0, weight: Number(d.weight) };
       }
+      const diagnosticDetails = qs.map((q) => detailsFor(q, form.has("a" + q.id) ? val(form, "a" + q.id) : null));
+      await recordAttempt(sql, user.id, "diagnostic", diagnosticDetails);
       const rows = await sql`INSERT INTO diagnostic (user_id,scores,total) VALUES (${user.id},${JSON.stringify(scores)},${total}) RETURNING id`;
       return redirect("/diagnostic/" + rows[0].id);
     }
@@ -469,10 +529,43 @@ export default async function handler(request: Request): Promise<Response> {
       const rows = await sql`SELECT id,scores,total,created_at FROM diagnostic WHERE id=${Number(diagnosticMatch[1])} AND user_id=${user.id} LIMIT 1`;
       if (!rows.length) return response("<h1>404 · Diagnostic introuvable</h1>", 404);
       const scores = parseJson(rows[0].scores, {});
-      const body = '<section class="section"><div class="section-head"><div class="eyebrow">RÉSULTAT DU DIAGNOSTIC</div><h2>Ton bilan</h2><p>' + e(formatDate(rows[0].created_at)) + '</p></div><div class="feature-grid">' +
-        Object.entries(scores).map(([name, entry]: [string, any]) => card(name, entry.count ? entry.percent + " % · " + entry.correct + "/" + entry.count : "Pas assez de réponses", "MATIÈRE")).join("") +
-        '</div><div class="actions"><a class="btn primary" href="/courses">Commencer les cours</a><a class="btn ghost" href="/dashboard">Retour au tableau de bord</a></div></section>';
-      return pageResponse(request, user, session, "Résultat du diagnostic", body);
+      const domainResults = summarizeDiagnosticDomains(scores);
+      const strengths = domainResults.filter((entry) => entry.category === "strength");
+      const priorities = domainResults.filter((entry) => entry.category === "priority");
+      const developing = domainResults.filter((entry) => entry.category === "developing");
+      const measured = domainResults.filter((entry) => entry.percent !== null);
+      const totalAnswered = domainResults.reduce((sum, entry) => sum + entry.answered, 0);
+      const totalCorrect = domainResults.reduce((sum, entry) => sum + entry.correct, 0);
+      const radarLabels = measured.map((entry) => entry.domain);
+      const radarValues = measured.map((entry) => Number(entry.percent));
+      const [allDiagnostics, allAttempts, studyTotal, lessonTotal] = await Promise.all([
+        sql`SELECT scores,created_at FROM diagnostic WHERE user_id=${user.id} ORDER BY created_at ASC`,
+        sql`SELECT mode,score,total,created_at,details FROM attempt WHERE user_id=${user.id} ORDER BY created_at ASC LIMIT 3000`,
+        sql`SELECT COALESCE(SUM(minutes),0) AS minutes FROM study_session WHERE user_id=${user.id}`,
+        sql`SELECT COUNT(*) AS completed FROM lesson_completion WHERE user_id=${user.id}`,
+      ]);
+      const xp = calculateXpSnapshot(allDiagnostics as Row[], allAttempts as Row[], Number(studyTotal[0]?.minutes ?? 0), Number(lessonTotal[0]?.completed ?? 0));
+      const domainCard = (entry: any) => {
+        const label = entry.category === "strength" ? "Point fort" : entry.category === "priority" ? "À renforcer" : entry.category === "developing" ? "En progression" : "Pas encore évaluée";
+        const percent = entry.percent === null ? "—" : entry.percent + " %";
+        const tone = entry.category === "strength" ? "skill-strength" : entry.category === "priority" ? "skill-priority" : entry.category === "developing" ? "skill-developing" : "skill-unassessed";
+        return '<article class="feature diagnostic-skill-card ' + tone + '"><div class="diagnostic-skill-top"><span>' + e(label) + '</span><strong>' + percent + '</strong></div><h3>' + e(entry.domain) + '</h3><p>' + (entry.answered ? e(entry.correct) + ' bonne(s) réponse(s) sur ' + e(entry.answered) : 'Aucune réponse évaluée pour cette matière.') + '</p></article>';
+      };
+      const insight = (title: string, entries: any[], message: string, tone: string) =>
+        '<article class="panel diagnostic-insight ' + tone + '"><h3>' + title + '</h3>' + (entries.length ? '<ul>' + entries.map((entry) => '<li><b>' + e(entry.domain) + '</b><span>' + (entry.percent === null ? '—' : entry.percent + ' %') + '</span></li>').join("") + '</ul>' : '<p class="muted">' + message + '</p>') + '</article>';
+      const body = '<section class="section diagnostic-result"><div class="section-head"><div class="eyebrow">TON BILAN DE DÉPART</div><h1>Voici où tu en es.</h1><p class="muted">' + e(formatDate(rows[0].created_at)) + ' · ' + totalCorrect + ' bonne(s) réponse(s) sur ' + totalAnswered + ' question(s). Ce bilan t’aide à choisir quoi travailler en premier ; il ne mesure pas toute ta capacité d’apprentissage.</p></div>' +
+        '<div class="diagnostic-xp-strip"><div><span class="eyebrow">XP GAGNÉS AU DIAGNOSTIC</span><strong>+' + xp.diagnosticXp + ' XP</strong></div><div><span>Niveau ' + xp.level + '</span><small>' + xp.levelProgress + ' / 250 XP vers le niveau suivant</small></div><a class="btn primary" href="/dashboard">Voir mon évolution</a></div>' +
+        '<div class="diagnostic-result-grid"><article class="panel dashboard-chart-card"><div class="eyebrow">PROFIL PAR MATIÈRE</div><h2>Carte de tes compétences</h2><p class="muted">Chaque axe représente un résultat observé sur trois questions. Les matières non évaluées restent à part.</p>' +
+        (measured.length ? '<canvas class="progress-canvas radar-canvas" data-progress-chart="radar" data-labels="' + e(JSON.stringify(radarLabels)) + '" data-values="' + e(JSON.stringify(radarValues)) + '" aria-label="Profil initial par matière"></canvas>' : '<p class="muted">Aucune matière évaluée dans ce diagnostic.</p>') +
+        '</article><div class="diagnostic-insights">' +
+        insight("Points forts", strengths, "Aucun point fort identifié pour le moment. Continue les exercices pour consolider tes acquis.", "insight-strength") +
+        insight("Priorités de révision", priorities, "Aucune priorité urgente détectée dans ce premier bilan.", "insight-priority") +
+        insight("Notions à consolider", developing, "Les résultats apparaîtront après davantage d’évaluations.", "insight-developing") +
+        '</div></div><div class="section-head"><div class="eyebrow">DÉTAIL PAR MATIÈRE</div><h2>Ce que tu maîtrises déjà et ce qu’on va travailler</h2></div><div class="feature-grid diagnostic-skill-grid">' +
+        domainResults.map(domainCard).join("") + '</div>' +
+        '<p class="muted diagnostic-note">Repères indicatifs : 70 % et plus = point fort observé ; moins de 50 % = priorité de révision ; entre les deux = notion à consolider. Trois questions par matière donnent un premier indicateur, pas une évaluation définitive.</p>' +
+        '<div class="actions"><a class="btn primary" href="/courses">Commencer les cours</a><a class="btn ghost" href="/dashboard">Mon tableau de bord</a><a class="btn ghost" href="/planner">Plan de révision</a></div></section>';
+      return pageResponse(request, user, session, "Bilan du diagnostic", body);
     }
 
     if (path === "/courses" && method === "GET") {
