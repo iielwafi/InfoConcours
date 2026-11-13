@@ -43,7 +43,8 @@ export function readSession(token?: string): UserSession | null {
     if (!Number.isInteger(payload.userId) || payload.userId <= 0) return null;
     if (payload.role !== "student" && payload.role !== "admin") return null;
     if (payload.language !== "fr" && payload.language !== "ar") return null;
-    if (!payload.nonce || payload.expiresAt <= Math.floor(Date.now() / 1000)) return null;
+    if (typeof payload.nonce !== "string" || payload.nonce.length < 16) return null;
+    if (!Number.isInteger(payload.expiresAt) || payload.expiresAt <= Math.floor(Date.now() / 1000)) return null;
     return payload;
   } catch {
     return null;
