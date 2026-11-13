@@ -597,7 +597,7 @@ export default async function handler(request: Request): Promise<Response> {
 
             const history = (attemptsByExercise.get(Number(x.id)) ?? []).map((attempt) => {
               const state = attempt.status === "pending_manual"
-                ? "Ancienne tentative en attente"
+                ? "Ancienne tentative à reprendre avec le professeur IA"
                 : attempt.status === "ai_retry"
                   ? "Le professeur IA demande une réponse plus précise"
                   : attempt.status === "ai_graded"
@@ -612,7 +612,7 @@ export default async function handler(request: Request): Promise<Response> {
                 : " · " + Math.round(Number(attempt.score)) + " %";
               let result = "";
               if (attempt.status === "pending_manual" || attempt.status === "ai_retry") {
-                result = '<div class="exercise-result exercise-result-pending">' + e(attempt.feedback || "Développe ton raisonnement puis essaie encore.") + '</div>';
+                result = '<div class="exercise-result exercise-result-pending">' + e(attempt.feedback || (attempt.status === "pending_manual" ? "Cette ancienne réponse n’a pas été évaluée. Reprends-la avec le professeur IA." : "Développe ton raisonnement puis essaie encore.")) + '</div>';
               } else if (attempt.status === "manually_graded") {
                 result = '<div class="exercise-result exercise-result-pending"><strong>Note historique · ' + e(Math.round(Number(attempt.score))) + ' %</strong></div>';
               } else if (attempt.status === "ai_graded" || attempt.status === "auto_graded") {
@@ -631,7 +631,7 @@ export default async function handler(request: Request): Promise<Response> {
                   (x.solution_ar ? '<div class="darija" lang="ar" dir="rtl">' + e(x.solution_ar) + '</div>' : '') +
                   '</details>'
                 : "";
-              const askAi = attempt.status === "ai_retry" || (attempt.score !== null && Number(attempt.score) < 100)
+              const askAi = attempt.status === "ai_retry" || attempt.status === "pending_manual" || (attempt.score !== null && Number(attempt.score) < 100)
                 ? '<a class="btn ghost ai-explain-link" href="/tutor?lesson_id=' + lessonId + '&exercise_id=' + Number(x.id) + '">Demander au professeur IA</a>'
                 : "";
               return '<div class="exercise-feedback"><div class="qmeta"><span>' + e(formatDate(attempt.created_at)) + '</span><span>' + state + score + '</span></div>' +
