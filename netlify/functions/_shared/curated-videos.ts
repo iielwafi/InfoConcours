@@ -161,10 +161,10 @@ export const CURATED_FRENCH_VIDEOS: CuratedFrenchVideo[] = [
   },
   {
     lessonTitle: "Coder nombres et caractères",
-    title: "Étapes d’exécution d’une instruction par le processeur — bases et codage binaire",
-    channel: "MEHDI.ma20",
-    videoId: "NxqS44Op1YU",
-    description: "Parties de la vidéo consacrées aux bases binaires, conversions, représentation des nombres et codage de l’information."
+    title: "Codage de l’information : binaire et hexadécimal",
+    channel: "Stefan Maurer",
+    videoId: "znIvv1lUoWo",
+    description: "Conversions décimal/binaire et décimal/hexadécimal, représentation des textes et codage des couleurs."
   },
   {
     lessonTitle: "Produire un document accessible et cohérent",
